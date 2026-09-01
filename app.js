@@ -2666,6 +2666,8 @@ function render(){
     if(sec!==cur){cur=sec;h+=`<div class="navsec">${secs[sec]}</div>`;}
     return h+`<button class="${rota===id?'on':''}" data-rota="${id}" ${rota===id?'aria-current="page"':''}><span class="dot" aria-hidden="true"></span>${label}</button>`;
   }).join('');
+  /* mantém o módulo ativo visível na barra lateral rolável */
+  $nav.querySelector('button.on')?.scrollIntoView({block:'nearest',inline:'nearest'});
   $main.innerHTML=(saveErro?`<div class="panel" style="border-color:var(--crit)"><p style="margin:0;color:var(--crit);font-weight:700">⚠️ Os dados NÃO estão sendo gravados neste navegador (armazenamento cheio ou bloqueado). Vá em Cadastros &amp; Dados e exporte o backup JSON agora, antes de fechar esta aba.</p></div>`:'')+PAGES[rota]();
   /* safras disponíveis: das que têm lançamento (ou 2018) até a que começa no ano que vem */
   const ys=[...db.cafe,...db.cargas,...db.fin,...db.lotes].map(r=>+String(r.data||'').slice(0,4)).filter(x=>x>2000);
