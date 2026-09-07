@@ -399,13 +399,21 @@ function normalizeDatabase(raw,{strict=false}={}){
   return next;
 }
 
-let db;
-try{db=normalizeDatabase(JSON.parse(localStorage.getItem(LS))||seed());}
-catch(e){db=seed();}
+let db,loadError='',unreadDatabase=null;
+try{unreadDatabase=localStorage.getItem(LS);db=normalizeDatabase(unreadDatabase===null?seed():JSON.parse(unreadDatabase));}
+catch(e){loadError=e.message||'Não foi possível ler os dados.';db=normalizeDatabase({...seed(),...Object.fromEntries(DB_ARRAYS.map(k=>[k,[]]))});}
 /* gravação falhou (cota cheia, armazenamento bloqueado): sinaliza em vez de engolir —
    sem isto o usuário seguiria lançando dados que não estão sendo salvos */
 let saveErro=false;
-const save=(value=db)=>{try{localStorage.setItem(LS,JSON.stringify(value));saveErro=false;return true;}catch(e){saveErro=true;return false;}};
+const save=(value=db,{recover=false}={})=>{try{
+  if(loadError){
+    if(!recover)return false;
+    // Nunca substituir o original ilegível sem preservar seus bytes.
+    const original=unreadDatabase??localStorage.getItem(LS);
+    if(original!==null)localStorage.setItem(LS+'-unread',original);
+  }
+  localStorage.setItem(LS,JSON.stringify(value));loadError='';saveErro=false;return true;
+}catch(e){saveErro=true;return false;}};
 
 /* ============ util ============ */
 const BRL=v=>(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0});
@@ -1137,7 +1145,7 @@ function medicaoHTML(){
       <td class="num">${BRL2(m.medidas*m.valorMedida)}</td>
       <td><span class="pill ${m.acertada?'good':'warn'}">${m.acertada?'acertada':'a pagar'}</span>
           <span class="pill ${m.consolidada?'good':'warn'}">${m.consolidada?'no café':'não consolidada'}</span></td>
-      <td><button class="x" data-action="del" data-col="medicoes" data-id="${m.id}" title="Excluir">✕</button></td></tr>`).join('')}
+      <td><button class="x" data-action="del" data-col="medicoes" data-id="${m.id}" ${m.acertada||m.consolidada?'disabled title="Medição já processada: edição e exclusão bloqueadas"':'title="Excluir"'}>✕</button></td></tr>`).join('')}
   </tbody></table></div>`;
   return medPanel;
 }
@@ -2265,7 +2273,8 @@ function idbOpen(){return new Promise((res,rej)=>{
   rq.onblocked=()=>{clearTimeout(to);rej(new Error('armazenamento bloqueado'));};});}
 async function filePut(id,blob){const d=idb||(idb=await idbOpen());
   return new Promise((res,rej)=>{const tx=d.transaction('files','readwrite');
-    tx.objectStore('files').put(blob,id);tx.oncomplete=res;tx.onerror=()=>rej(tx.error);});}
+    tx.objectStore('files').put(blob,id);tx.oncomplete=res;tx.onerror=()=>rej(tx.error);
+    tx.onabort=()=>rej(tx.error||new Error('Gravação do arquivo cancelada.'));});}
 async function fileGet(id){const d=idb||(idb=await idbOpen());
   return new Promise((res,rej)=>{const rq=d.transaction('files').objectStore('files').get(id);
     rq.onsuccess=()=>res(rq.result);rq.onerror=()=>rej(rq.error);});}
@@ -2295,13 +2304,15 @@ function showStatus(message,{undo=false,timeout=15000}={}){
   if(timeout)statusTimer=setTimeout(()=>{box.hidden=true;},timeout);
 }
 function saveRecovery(reason){
+  if(loadError)return false;
   try{localStorage.setItem(LS_RECOVERY,JSON.stringify({version:DB_VERSION,createdAt:new Date().toISOString(),reason,db}));return true;}
   catch(e){showStatus('Não foi possível criar o ponto de recuperação: armazenamento cheio ou bloqueado.',{timeout:0});return false;}
 }
 async function beginUndo(label,fileIds=[]){
-  saveRecovery(label);
+  const recovered=saveRecovery(label);
   undoState={label,db:JSON.stringify(db),files:[]};
   for(const id of fileIds){try{const blob=await fileGet(id);if(blob)undoState.files.push({id,blob});}catch(e){}}
+  return recovered;
 }
 async function undoLast(){
   if(!undoState)return;
@@ -2335,7 +2346,7 @@ async function importBackupPayload(payload){
   const files=payload?.format==='gefaz360-backup'?(payload.files||[]):[];
   if(!Array.isArray(files))throw new Error('A lista de arquivos do backup é inválida.');
   const docIds=new Set(candidate.documentos.map(d=>d.id));
-  const seenFiles=new Set();let totalBytes=0;
+  const seenFiles=new Set(),prepared=[];let totalBytes=0;
   for(const f of files){
     if(!f||!docIds.has(f.id)||typeof f.data!=='string')throw new Error('O backup contém um arquivo sem metadados correspondentes.');
     if(seenFiles.has(f.id))throw new Error('O backup contém arquivos duplicados.');seenFiles.add(f.id);
@@ -2343,10 +2354,22 @@ async function importBackupPayload(payload){
     if(!(/^image\//.test(blob.type)||blob.type==='application/pdf'))throw new Error('O backup contém um tipo de arquivo não permitido.');
     if(blob.size>20*1048576)throw new Error('O backup contém um documento maior que 20 MB.');
     totalBytes+=blob.size;if(totalBytes>200*1048576)throw new Error('Os documentos do backup excedem o limite total de 200 MB.');
-    await filePut(f.id,blob);
+    prepared.push({oldId:f.id,id:uid(),blob});
   }
-  saveRecovery('Antes da importação de backup');
-  if(!save(candidate))throw new Error('Não foi possível gravar o backup importado.');
+  if(!loadError&&!saveRecovery('Antes da importação de backup'))throw new Error('Importação cancelada: não foi possível preservar o banco atual.');
+  // IDs novos tornam os anexos imutáveis: uma falha não altera os arquivos atuais
+  // nem os referenciados pelo ponto de recuperação, mesmo se a aba for fechada.
+  const staged=[];
+  try{
+    for(const f of prepared){
+      staged.push(f.id);await filePut(f.id,f.blob);
+      const doc=candidate.documentos.find(d=>d.id===f.oldId);doc.id=f.id;doc.mime=f.blob.type;doc.size=f.blob.size;
+    }
+    if(!save(candidate,{recover:true}))throw new Error('Não foi possível gravar o backup importado.');
+  }catch(e){
+    for(const id of staged){try{await fileDel(id);}catch(cleanupError){/* Órfãos não substituem arquivos existentes. */}}
+    throw e;
+  }
   db=candidate;undoState=null;anoFiltro=safraDe(hoje);render();
   const missing=candidate.documentos.length-files.length;
   showStatus(`Backup importado com sucesso: ${files.length} arquivo(s) restaurado(s)${missing?`; ${missing} ausente(s) no arquivo importado`:''}.`,{timeout:missing?0:9000});
@@ -2354,7 +2377,7 @@ async function importBackupPayload(payload){
 function restoreRecovery({preserveUndo=false}={}){
   const stored=localStorage.getItem(LS_RECOVERY);if(!stored)throw new Error('Não há ponto de recuperação disponível.');
   const payload=JSON.parse(stored),candidate=normalizeDatabase(payload.db,{strict:true});
-  if(!save(candidate))throw new Error('Não foi possível gravar o ponto de recuperação.');
+  if(!save(candidate,{recover:true}))throw new Error('Não foi possível gravar o ponto de recuperação.');
   db=candidate;if(!preserveUndo)undoState=null;anoFiltro=safraDe(hoje);render();
 }
 const fmtKB=b=>b>=1048576?N(b/1048576,1)+' MB':N(b/1024,0)+' KB';
@@ -2626,7 +2649,7 @@ function validateForm(f){
   }
   if(f.id==='f-chuva'&&val(f,'data')>hoje)add('data','A chuva não pode ser registrada em uma data futura.');
   if(f.id==='f-vcafe'){
-    const loteId=val(f,'loteId'),sacas=num(f,'sacas'),disponivel=loteId?sacasDisponiveis(loteId):estoqueCafeDisponivel();
+    const loteId=val(f,'loteId'),sacas=num(f,'sacas'),total=estoqueCafeDisponivel(),disponivel=loteId?Math.min(sacasDisponiveis(loteId),total):total;
     if(sacas>disponivel+0.001)add('sacas',loteId?`Este lote tem apenas ${N(disponivel,0)} saca(s) disponíveis.`:`O estoque total tem apenas ${N(disponivel,0)} saca(s) disponíveis.`);
   }
   if(f.elements.area&&f.elements.talhaoId){
@@ -2660,6 +2683,19 @@ function validateForm(f){
 }
 
 function render(){
+  if(loadError){
+    $nav.innerHTML='';document.getElementById('safraBox').innerHTML='';
+    $main.innerHTML=`<h1>Recuperar dados</h1><div class="panel"><p>Não foi possível abrir o banco existente. Os registros originais foram mantidos e os lançamentos estão bloqueados.</p><p>${esc(loadError)}</p><button class="btn" data-action="export-unread">Baixar dados originais</button> <button class="btn" data-action="restore-backup">Restaurar ponto de recuperação</button><p><label>Importar backup válido <input id="recover-import" type="file" accept="application/json,.json"></label></p><p id="recover-msg" role="status"></p></div>`;
+    document.getElementById('recover-import').onchange=async e=>{
+      const file=e.target.files[0];if(!file)return;
+      try{
+        if(file.size>300*1048576)throw new Error('O arquivo excede o limite de 300 MB.');
+        const payload=JSON.parse(await file.text());
+        if(confirm('Recuperar usando este backup? Uma cópia dos dados originais será preservada neste navegador.'))await importBackupPayload(payload);
+      }catch(err){document.getElementById('recover-msg').textContent=err.message;}
+    };
+    return;
+  }
   const secs={op:'Operação',adm:'Gestão',sys:'Sistema'};let cur='';
   $nav.innerHTML=ROTAS.map(([id,label,sec])=>{
     let h='';
@@ -2682,6 +2718,7 @@ function render(){
     `<div class="sub" style="font-size:11px;margin:4px 0 0">${anoFiltro?esc(safraPeriodo(anoFiltro)):'ano-safra: '+mesNome[(db.params.mesInicioSafra||10)-1]+' a '+mesNome[((db.params.mesInicioSafra||10)+10)%12]}</div>`;
   /* botão ✎ ao lado de cada ✕ cujo formulário de edição existe na página */
   $main.querySelectorAll('[data-action="del"]').forEach(x=>{
+    if(x.disabled)return;
     const fid=EDIT_FORM[x.dataset.col];
     if(!fid||!document.getElementById(fid))return;
     const e=document.createElement('button');
@@ -2776,11 +2813,15 @@ const val=(f,n)=>f.elements[n]?f.elements[n].value.trim():'';
 const num=(f,n)=>parseFloat(f.elements[n]?.value)||0;
 $main.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.target;
+  if(loadError)return;
   if(f.hasAttribute('data-passive-form'))return;
   const wasEditing=!!f.dataset.editId;
   if(!validateForm(f))return;
   if(f.id==='f-doc'){await docUpload(f);return;}
   const editingCol=FORM_COL[f.id],editingRec=editingCol&&f.dataset.editId?db[editingCol].find(x=>x.id===f.dataset.editId):null;
+  if(editingCol==='medicoes'&&(editingRec?.acertada||editingRec?.consolidada)){
+    showFormError(f,[{field:'medidas',message:'Medições acertadas ou consolidadas não podem ser alteradas.'}]);return;
+  }
   if(editingCol==='fin'&&(editingRec?.cargaId||editingRec?.vendaId||editingRec?.pulvOSId)){
     showFormError(f,[{field:'desc',message:'Este lançamento é gerenciado pelo módulo de origem e não pode ser editado diretamente.'}]);return;
   }
@@ -2942,12 +2983,12 @@ const REF_LABELS={cafe:['colheita de café','colheitas de café'],cargas:['carga
   mip:['ocorrência MIP','ocorrências MIP'],bienal:['marcação de bienalidade','marcações de bienalidade'],
   apont:['apontamento','apontamentos'],os:['ordem de serviço','ordens de serviço'],
   abastecimentos:['abastecimento','abastecimentos'],lembretes:['lembrete','lembretes'],receitas:['receita','receitas'],
-  secagens:['secagem','secagens'],vendasCafe:['venda de café','vendas de café'],fin:['lançamento financeiro','lançamentos financeiros']};
+  secagens:['secagem','secagens'],vendasCafe:['venda de café','vendas de café'],fin:['lançamento financeiro','lançamentos financeiros'],documentos:['documento','documentos']};
 function referencesFor(col,id){
   const rules={
     talhoes:[['cafe','talhaoId'],['cargas','talhaoId'],['medicoes','talhaoId'],['pulvOS','talhaoId'],['regColheita','talhaoId'],
       ['lotes','talhaoId'],['coberturas','talhaoId'],['solos','talhaoId'],['adubacoes','talhaoId'],['podas','talhaoId'],
-      ['arruacoes','talhaoId'],['capinas','talhaoId'],['geoTalhoes','talhaoId'],['mip','talhaoId'],['bienal','talhaoId'],['os','talhaoId']],
+      ['arruacoes','talhaoId'],['capinas','talhaoId'],['geoTalhoes','talhaoId'],['mip','talhaoId'],['bienal','talhaoId'],['os','talhaoId'],['documentos','talhaoId']],
     func:[['apont','funcId'],['medicoes','funcId'],['os','responsavelId']],
     maquinas:[['os','maqId'],['regColheita','maquinaId'],['regAplicacao','maquinaId'],['abastecimentos','maqId'],['lembretes','maqId']],
     receitas:[['pulvOS','receitaId']],pulvOS:[['fin','pulvOSId']],
@@ -2959,6 +3000,7 @@ function referencesFor(col,id){
 function deleteBlock(col,id){
   const rec=db[col]?.find(x=>x.id===id);
   if(!rec)return 'O registro não existe mais.';
+  if(col==='medicoes'&&(rec.acertada||rec.consolidada))return 'Medições acertadas ou consolidadas não podem ser excluídas.';
   if(col==='fin'&&(rec.cargaId||rec.vendaId||rec.pulvOSId))return 'Este lançamento é gerenciado pelo módulo de origem. Altere ou exclua o registro de origem.';
   const refs=referencesFor(col,id);
   return refs.length?'Não é possível excluir enquanto estiver em uso por '+refs.map(([c,n])=>`${n} ${(REF_LABELS[c]||[c,c])[n===1?0:1]}`).join(', ')+'.':'';
@@ -2968,6 +3010,12 @@ function recordName(rec){return String(rec?.nome||rec?.codigo||rec?.titulo||rec?
 $main.addEventListener('click',async e=>{
   const b=e.target.closest('[data-action]');if(!b)return;
   const a=b.dataset.action,id=b.dataset.id;
+  if(a==='export-unread'){
+    const raw=unreadDatabase??localStorage.getItem(LS);
+    if(raw!==null)downloadBlob(new Blob([raw],{type:'application/json'}),'gefaz360-dados-originais.json');
+    return;
+  }
+  if(loadError&&a!=='restore-backup')return;
   let changed=false,statusMessage='Alteração salva.';
   if(a==='os-tab'){
     const status=b.dataset.status;if(!['ativas','todas',...OS_STATUS].includes(status))return;
@@ -3018,8 +3066,10 @@ $main.addEventListener('click',async e=>{
     const col=b.dataset.col,block=deleteBlock(col,id);if(block){showStatus(block,{timeout:0});return;}
     const alvo=db[col].find(x=>x.id===id);
     if(!confirm(`Excluir permanentemente “${recordName(alvo)}”? Você poderá desfazer logo após a exclusão.`))return;
-    await beginUndo('Exclusão de registro',col==='documentos'?[id]:[]);
-    if(col==='documentos'){try{await fileDel(id);}catch(err){showStatus('Não foi possível excluir o arquivo; nenhum dado foi removido.',{timeout:0});return;}}
+    const recovered=await beginUndo('Exclusão de registro');
+    if(col==='documentos'&&!recovered)return;
+    // Anexos removidos ficam retidos no IndexedDB para recuperação após recarregar.
+    // Não apagar arquivos referenciados por snapshots persistentes.
     db[col]=db[col].filter(x=>x.id!==id);
     if(col==='secagens'&&alvo){const lt=db.lotes.find(l=>l.id===alvo.loteId);if(lt&&lt.status==='secando')lt.status='terreiro';}
     if(col==='vendasCafe')db.fin=db.fin.filter(fx=>fx.vendaId!==id);
@@ -3046,6 +3096,7 @@ $main.addEventListener('click',async e=>{
       const linked=db.fin.find(x=>x.id===id);if(linked&&(linked.cargaId||linked.vendaId||linked.pulvOSId)){showStatus('Este lançamento é atualizado pelo registro de origem.',{timeout:0});return;}
     }
     const rec=db[col]?.find(x=>x.id===id),fEd=document.getElementById(fid);
+    if(col==='medicoes'&&(rec?.acertada||rec?.consolidada)){showStatus('Medições acertadas ou consolidadas não podem ser alteradas.',{timeout:0});return;}
     if(rec&&fEd){
       [...fEd.elements].forEach(el=>{
         if(!el.name)return;
@@ -3142,14 +3193,18 @@ $main.addEventListener('click',async e=>{
     const o=db.pulvOS.find(x=>x.id===id);if(!o||o.status==='concluida')return;
     const r=db.receitas.find(x=>x.id===o.receitaId),msg=document.getElementById('pulv-msg');
     if(!r){if(msg)msg.innerHTML='<span class="pill crit">Receita da ordem não existe mais.</span>';return;}
-    const falta=(r.itens||[]).map(i=>{const p=db.defensivos.find(d=>d.id===i.prodId);return {p,need:i.dose*o.area};}).filter(x=>!x.p||x.p.qtd<x.need);
+    const quantities=new Map();
+    for(const i of r.itens||[])quantities.set(i.prodId,(quantities.get(i.prodId)||0)+Number(i.dose)*Number(o.area));
+    const required=[...quantities].map(([prodId,need])=>({p:db.defensivos.find(d=>d.id===prodId),need}));
+    if(!required.length||required.some(x=>!Number.isFinite(x.need)||x.need<=0)){showStatus('A receita precisa conter doses válidas maiores que zero.',{timeout:0});return;}
+    const falta=required.filter(x=>!x.p||!Number.isFinite(Number(x.p.qtd))||Number(x.p.qtd)<x.need);
     if(falta.length){
       if(msg)msg.innerHTML='<span class="pill crit">Estoque insuficiente: '+falta.map(x=>x.p?esc(x.p.nome)+' (precisa '+N(x.need,1)+' '+esc(x.p.unidade)+', tem '+N(x.p.qtd,1)+')':'produto excluído').join('; ')+'</span>';return;
     }
     const custo=custoReceitaHa(r)*o.area;
     if(!confirm(`Concluir a aplicação em ${N(o.area,1)} ha? Serão baixados os defensivos e lançado o custo de ${BRL2(custo)}.`))return;
     await beginUndo('Conclusão de aplicação');
-    (r.itens||[]).forEach(i=>{const p=db.defensivos.find(d=>d.id===i.prodId);p.qtd-=i.dose*o.area;});
+    required.forEach(({p,need})=>{p.qtd-=need;});
     const cult=(tal(o.talhaoId).cultura||'cafe');
     db.fin.push({id:uid(),data:hoje,tipo:'saida',categoria:'Defensivos',centro:cult==='cafe'?'Cafe':cult[0].toUpperCase()+cult.slice(1),
       desc:'Aplicação: '+r.nome+' — '+tal(o.talhaoId).nome+' ('+N(o.area,1)+' ha)',valor:custo,status:'realizado',pulvOSId:o.id});
@@ -3159,9 +3214,9 @@ $main.addEventListener('click',async e=>{
   else if(a==='restore-backup'){
     if(!confirm('Restaurar o último ponto de recuperação? Os dados atuais serão substituídos, mas esta ação poderá ser desfeita logo após.'))return;
     try{
-      const current=JSON.stringify(db);restoreRecovery({preserveUndo:true});
-      undoState={label:'Restauração do ponto de recuperação',db:current,files:[]};
-      showStatus('Ponto de recuperação restaurado.',{undo:true});
+      const current=loadError?null:JSON.stringify(db);restoreRecovery({preserveUndo:true});
+      undoState=current?{label:'Restauração do ponto de recuperação',db:current,files:[]}:null;
+      showStatus('Ponto de recuperação restaurado.',{undo:!!current});
     }catch(err){showStatus('Falha ao restaurar: '+err.message,{timeout:0});}
     return;
   }

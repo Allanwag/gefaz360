@@ -32,6 +32,23 @@ descrição, máquina, peças ou mão de obra.
    perfil do navegador poderá lê-los. Para dados reais, proteja o dispositivo e o
    perfil do sistema operacional.
 
+Importações validam todos os anexos antes da gravação e usam novos identificadores
+para preservar os arquivos atuais. Documentos excluídos e anexos substituídos
+permanecem no IndexedDB para permitir recuperação mesmo após fechar a aba.
+Essa retenção consome espaço: nesta versão, não há limpeza automática desses
+arquivos. O backup exporta somente os documentos do banco ativo.
+
+Se o banco existente não puder ser lido, o aplicativo bloqueia novos lançamentos
+e abre a tela **Recuperar dados**, com opções para baixar o conteúdo original,
+importar um backup válido ou restaurar o ponto de recuperação. A recuperação
+preserva uma cópia do conteúdo ilegível na chave `pvgest-erp-v1-unread` antes da
+substituição. Uma falha de armazenamento impede a substituição.
+
+Medições já acertadas ou consolidadas ficam bloqueadas para edição e exclusão,
+pois seus valores já foram transferidos ao financeiro ou à colheita. Confira-as
+antes de processar; o desfazer imediato permite voltar à etapa anterior. Esta
+versão não oferece estorno de acertos antigos.
+
 ## Executar localmente
 
 Sirva a pasta por HTTP; abrir o HTML diretamente com `file://` pode limitar APIs do
