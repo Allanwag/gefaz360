@@ -1299,7 +1299,7 @@ function pgPvgest(){
   <div class="tblwrap"><table><thead><tr><th>Receita</th><th>Cultura</th><th>Alvo</th><th class="num">Calda L/ha</th><th class="num">Produtos</th><th class="num">Custo/ha</th><th></th></tr></thead><tbody>
     ${db.receitas.map(r=>`<tr><td>${esc(r.nome)}</td><td>${esc(r.cultura||'—')}</td><td>${esc(r.alvo||'—')}</td>
       <td class="num">${N(r.volumeHa)}</td><td class="num">${(r.itens||[]).length}</td><td class="num">${BRL2(custoReceitaHa(r))}</td>
-      <td><button class="x" data-action="del" data-col="receitas" data-id="${r.id}" title="Excluir">✕</button></td></tr>`).join('')}
+      <td><div class="os-actions"><button class="btn mini ghost" data-action="calda" data-id="${r.id}" title="Verificar compatibilidade da calda no Gefaz Calda">🧪 Compat.</button><button class="x" data-action="del" data-col="receitas" data-id="${r.id}" title="Excluir">✕</button></div></td></tr>`).join('')}
   </tbody></table></div>
   <h2>Estoque de defensivos</h2>
   <div class="panel"><h3>Novo produto</h3>
@@ -3061,6 +3061,13 @@ $main.addEventListener('click',async e=>{
     o.apontamentos.push({id:uid(),data:hoje,criadoEm:new Date().toISOString(),texto:`Status alterado para ${label.toLowerCase()}.`,
       progresso:o.progresso,realizado:o.realizado,status:next});
     changed=true;statusMessage=`Ordem marcada como ${label.toLowerCase()}.`;
+  }
+  else if(a==='calda'){
+    // Abre o Gefaz Calda (mesma origem) com a receita montada; água e equipamento ficam na configuração de lá
+    const r=db.receitas.find(x=>x.id===id);if(!r)return;
+    if(!window.GefazCalda){showStatus('Gefaz Calda não carregou. Verifique a conexão e recarregue a página.',{timeout:0});return;}
+    if(!GefazCalda.abrir(GefazCalda.deGefaz360(r,db.defensivos)))showStatus('Permita pop-ups para abrir o Gefaz Calda.',{timeout:0});
+    return;
   }
   else if(a==='del'){
     const col=b.dataset.col,block=deleteBlock(col,id);if(block){showStatus(block,{timeout:0});return;}
