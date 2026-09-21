@@ -259,9 +259,18 @@ function seed(){
     {id:uid(),maqId:maquinas[4].id,desc:'Troca de óleo da transmissão',horimetroAlvo:6150,dataAlvo:'',obs:'',feito:false},
     {id:uid(),maqId:maquinas[3].id,desc:'Revisão do sistema de freios',horimetroAlvo:0,dataAlvo:'2026-07-25',
      obs:'Reclamação do motorista na descida da serra',feito:false}];
-  return {version:DB_VERSION,params:{litrosPorSaca:480,litrosPorMedida:60,litrosPorCarreta:5000,minDiesel:1000,diariaMinima:100,mesInicioSafra:10},talhoes,cafe,cargas,fin,func,apont,maquinas,os,estoque,medicoes,defensivos,receitas,pulvOS,regColheita,regAplicacao,lotes,secagens,coberturas,combCompras,abastecimentos,lembretes,vendasCafe,chuvas,leiturasDT,solos,adubacoes,podas,arruacoes,capinas,documentos:[],geoTalhoes:[],mip:[],
+  const demo={version:DB_VERSION,params:{litrosPorSaca:480,litrosPorMedida:60,litrosPorCarreta:5000,minDiesel:1000,diariaMinima:100,mesInicioSafra:10},talhoes,cafe,cargas,fin,func,apont,maquinas,os,estoque,medicoes,defensivos,receitas,pulvOS,regColheita,regAplicacao,lotes,secagens,coberturas,combCompras,abastecimentos,lembretes,vendasCafe,chuvas,leiturasDT,solos,adubacoes,podas,arruacoes,capinas,documentos:[],geoTalhoes:[],mip:[],
     bienal:[].concat(...[['2023/24','alta'],['2024/25','baixa'],['2025/26','alta']].map(([s,c])=>
       ['c1','c2','c3'].map(t=>({id:uid(),talhaoId:t,safra:s,carga:c,obs:''}))))};
+  /* os títulos de exemplo citam NFs no formato antigo; o vínculo é feito já na criação */
+  migrateLegacyLinks(demo);
+  return demo;
+}
+/* a NF (ou código de lote) aparece como termo inteiro no texto — "207" não casa com "2070" */
+function citaNF(texto,nf){
+  const alvo=String(nf??'').trim();if(!alvo)return false;
+  const re=new RegExp('(^|[^0-9A-Za-z])'+alvo.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'($|[^0-9A-Za-z])');
+  return re.test(String(texto||''));
 }
 
 function migrateLegacyLinks(next){
@@ -271,7 +280,7 @@ function migrateLegacyLinks(next){
   const alreadyLinked=new Set(next.fin.filter(f=>f.cargaId).map(f=>f.cargaId));
   next.fin=next.fin.flatMap(f=>{
     if(f.cargaId||f.vendaId||f.categoria!=='Venda de grãos')return [f];
-    const matches=next.cargas.filter(c=>!alreadyLinked.has(c.id)&&c.nf&&String(f.desc||'').includes(String(c.nf)));
+    const matches=next.cargas.filter(c=>!alreadyLinked.has(c.id)&&citaNF(f.desc,c.nf));
     if(!matches.length)return [f];
     const weights=matches.map(c=>cargaCalc(c).valor),total=weights.reduce((s,v)=>s+v,0)||matches.length;
     return matches.map((c,i)=>{
@@ -281,11 +290,11 @@ function migrateLegacyLinks(next){
     });
   });
   next.vendasCafe.forEach(v=>{
-    if(!v.loteId){const l=next.lotes.find(x=>x.codigo&&String(v.obs||'').includes(x.codigo));if(l)v.loteId=l.id;}
+    if(!v.loteId){const l=next.lotes.find(x=>citaNF(v.obs,x.codigo));if(l)v.loteId=l.id;}
     if(!next.fin.some(f=>f.vendaId===v.id)){
       const expected=(Number(v.sacas)||0)*(Number(v.preco)||0);
       const f=next.fin.find(x=>!x.cargaId&&!x.vendaId&&x.categoria==='Venda de café'&&
-        ((v.nf&&String(x.desc||'').includes(v.nf))||(x.data===v.data&&Math.abs((Number(x.valor)||0)-expected)<0.01)));
+        (citaNF(x.desc,v.nf)||(x.data===v.data&&Math.abs((Number(x.valor)||0)-expected)<0.01)));
       if(f)f.vendaId=v.id;
     }
   });
@@ -395,7 +404,9 @@ function normalizeDatabase(raw,{strict=false}={}){
   const mi=Number(next.params.mesInicioSafra);next.params.mesInicioSafra=Number.isInteger(mi)&&mi>=1&&mi<=12?mi:10;
   next.cafe.forEach(r=>{if(r.tipo==='Derriça (árvore)')r.tipo='Manual (pano)';});
   next.medicoes.forEach(r=>{if(r.tipo==='Derriça (árvore)')r.tipo='Manual (pano)';});
-  normalizeOperationalOrders(next,{strict});migrateLegacyLinks(next);if(strict)validateDatabaseIntegrity(next);
+  /* a migração de vínculos é heurística (procura NFs no texto): roda uma única vez, só em bancos
+     gravados antes da v4. Rodar em todo carregamento reescrevia lançamentos manuais novos. */
+  normalizeOperationalOrders(next,{strict});if(!(Number(raw.version)>=4))migrateLegacyLinks(next);if(strict)validateDatabaseIntegrity(next);
   return next;
 }
 
@@ -416,7 +427,8 @@ const save=(value=db,{recover=false}={})=>{try{
 }catch(e){saveErro=true;return false;}};
 
 /* ============ util ============ */
-const BRL=v=>(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0});
+/* minimumFractionDigits explícito: sem ele, navegadores anteriores ao Intl de 2023 lançam RangeError (máx. 0 < mín. 2 do BRL) */
+const BRL=v=>(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',minimumFractionDigits:0,maximumFractionDigits:0});
 const BRL2=v=>(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const N=(v,d=0)=>(v||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});
 const dBR=s=>{const[y,m,d]=String(s||'').split('-');return y&&m&&d?d+'/'+m:'—';};
@@ -1364,7 +1376,7 @@ function pgConfig(){
         <button class="btn">Cadastrar</button>
       </form>
       <div class="tblwrap"><table style="min-width:0"><thead><tr><th>Talhão</th><th>Cultura</th><th>Variedade</th><th class="num">Área</th><th></th></tr></thead><tbody>
-        ${db.talhoes.map(t=>`<tr><td>${esc(t.nome)}</td><td>${t.cultura==='cafe'?'Café':t.cultura[0].toUpperCase()+t.cultura.slice(1)}</td>
+        ${db.talhoes.map(t=>`<tr><td>${esc(t.nome)}</td><td>${esc(NOMES_CULT[t.cultura]||t.cultura||'—')}</td>
           <td>${esc(t.variedade)||'—'}</td><td class="num">${N(t.area,1)} ha</td>
           <td><button class="x" data-action="del" data-col="talhoes" data-id="${t.id}" title="Excluir">✕</button></td></tr>`).join('')}
       </tbody></table></div></div>
@@ -1876,13 +1888,23 @@ const NUM_PALAVRA={um:1,uma:1,dois:2,duas:2,tres:3,'três':3,quatro:4,cinco:5,se
 function parseNumero(s){
   if(!s)return null;s=s.trim().toLowerCase();
   if(NUM_PALAVRA[s]!==undefined)return NUM_PALAVRA[s];
-  const n=parseFloat(s.replace(/\./g,'').replace(',','.'));
+  s=s.replace(/[.,]+$/,'');   /* pontuação de fim de frase: "horímetro 4.210." */
+  /* padrão brasileiro: vírgula é decimal; ponto só é milhar em grupos de 3 ("3.000"), senão é decimal ("2.5") */
+  const n=parseFloat(s.includes(',')?s.replace(/\./g,'').replace(',','.'):/^\d{1,3}(\.\d{3})+$/.test(s)?s.replace(/\./g,''):s);
   return isNaN(n)?null:n;
 }
 function acharTalhao(txt){const low=txt.toLowerCase();return db.talhoes.find(t=>low.includes(t.nome.toLowerCase()));}
-function acharMaquina(txt){const low=txt.toLowerCase();
-  return db.maquinas.find(m=>low.includes(m.nome.toLowerCase()))||
-    db.maquinas.find(m=>(m.nome.match(/\d+/g)||[]).some(n=>low.includes(n)));
+/* nome completo primeiro; senão, a máquina com mais palavras do nome (ou do tipo) citadas como palavra
+   inteira — "30 litros" não pode casar com o "3" da "K3". Empate fica sem máquina, para o usuário escolher. */
+function acharMaquina(txt){const low=txt.toLowerCase().replace(/[\d.,]+\s*litros?|hor[ií]metro\s*[\d.,]+/g,' ');
+  const inteira=db.maquinas.find(m=>low.includes(m.nome.toLowerCase()));if(inteira)return inteira;
+  const palavras=new Set(low.match(/[\p{L}\p{N}]+/gu)||[]),vazias=new Set(['de','do','da','dos','das','com']);
+  const pontos=db.maquinas.map(m=>{
+    const termos=new Set([...(m.nome.toLowerCase().match(/[\p{L}\p{N}]+/gu)||[]),...(String(m.tipo||'').toLowerCase().match(/[\p{L}\p{N}]+/gu)||[]),
+      ...(m.nome.match(/\d{2,}/g)||[])].filter(t=>t.length>1&&!vazias.has(t)));
+    return {m,n:[...termos].filter(t=>palavras.has(t)).length};
+  }).filter(x=>x.n).sort((a,b)=>b.n-a.n);
+  return pontos.length&&(pontos.length===1||pontos[0].n>pontos[1].n)?pontos[0].m:undefined;
 }
 const NUMPAL_ALT='[\\d.,]+|um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez|meia';
 function parseLinha(linha){
@@ -2093,9 +2115,8 @@ function exportarKML(){
       <Data name="data"><value>${m.data}</value></Data><Data name="obs"><value>${esc(m.obs||'')}</value></Data></ExtendedData>
       <Point><coordinates>${m.lon},${m.lat},0</coordinates></Point></Placemark>`).join('');
   const kml=`<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Gefaz360</name>${placemarks}${pontos}</Document></kml>`;
-  const blob=new Blob([kml],{type:'application/vnd.google-earth.kml+xml'});
-  const u=URL.createObjectURL(blob),l=document.createElement('a');
-  l.href=u;l.download='gefaz360-talhoes.kml';l.click();URL.revokeObjectURL(u);
+  /* downloadBlob revoga a URL com atraso; revogar logo após o click cancela o download no Firefox/Safari */
+  downloadBlob(new Blob([kml],{type:'application/vnd.google-earth.kml+xml'}),'gefaz360-talhoes.kml');
 }
 function mapaSVG(modo){
   const gts=db.geoTalhoes;
@@ -2556,7 +2577,10 @@ const EDIT_FORM={cafe:'f-cafe',cargas:'f-carga',fin:'f-fin',func:'f-func',apont:
 const FORM_COL=Object.fromEntries(Object.entries(EDIT_FORM).map(([c,fo])=>[fo,c]));
 /* campos de fluxo que a edição não deve resetar */
 const STRIP_EDIT={'f-med':['acertada','consolidada'],'f-lote':['status','sacas'],
-  'f-lembrete':['feito'],'f-carga':['pago'],'f-os':['codigo','status','progresso','realizado','iniciadoEm','concluidoEm','checklist','apontamentos'],'f-item':['resp']};
+  'f-lembrete':['feito'],'f-carga':['pago'],'f-item':['resp'],
+  /* o formulário da oficina não tem módulo, categoria, talhão nem meta: a edição por ele não pode apagá-los */
+  'f-os':['codigo','status','progresso','realizado','iniciadoEm','concluidoEm','checklist','apontamentos',
+    'categoria','modulo','talhaoId','meta','unidade']};
 
 const FIELD_LIMITS={
   lat:{min:-90,max:90},lon:{min:-180,max:180},ph:{min:0,max:14},mm:{min:0,max:500},
@@ -2665,8 +2689,17 @@ function validateForm(f){
     if(Number.isFinite(last)&&num(f,'h')<=last)add('h',`A nova leitura deve ocorrer depois de ${N(last)} hora(s).`);
   }
   if(f.id==='f-abast'){
-    const m=db.maquinas.find(x=>x.id===val(f,'maqId'));
-    if(m&&num(f,'horimetro')<Number(m.horimetro||0))add('horimetro',`O horímetro não pode ser menor que o atual (${N(m.horimetro)} h).`);
+    const maqId=val(f,'maqId'),m=db.maquinas.find(x=>x.id===maqId),h=num(f,'horimetro');
+    if(f.dataset.editId){
+      /* edição de abastecimento antigo: o horímetro atual da máquina já inclui os posteriores,
+         então o limite é o dos vizinhos da mesma máquina, não o atual */
+      const outros=db.abastecimentos.filter(x=>x.id!==f.dataset.editId&&x.maqId===maqId),d=val(f,'data');
+      const antes=Math.max(0,...outros.filter(x=>x.data<d).map(x=>Number(x.horimetro)||0));
+      const depois=Math.min(Infinity,...outros.filter(x=>x.data>d).map(x=>Number(x.horimetro)||0));
+      if(h<antes)add('horimetro',`O horímetro não pode ser menor que ${N(antes)} h, registrado num abastecimento anterior.`);
+      else if(h>depois)add('horimetro',`O horímetro não pode passar de ${N(depois)} h, registrado num abastecimento posterior.`);
+    }
+    else if(m&&h<Number(m.horimetro||0))add('horimetro',`O horímetro não pode ser menor que o atual (${N(m.horimetro)} h).`);
   }
   if((f.id==='f-os'||f.id==='f-os-operacional')&&val(f,'prazo')<val(f,'data'))
     add('prazo','O prazo não pode ser anterior ao início planejado.');
@@ -2965,7 +2998,10 @@ $main.addEventListener('submit',async e=>{
   if(colE&&f.dataset.editId){
     const novo=db[colE].pop();
     const rec=db[colE].find(x=>x.id===f.dataset.editId);
-    if(rec&&novo){delete novo.id;(STRIP_EDIT[f.id]||[]).forEach(k=>delete novo[k]);Object.assign(rec,novo);
+    if(rec&&novo){delete novo.id;(STRIP_EDIT[f.id]||[]).forEach(k=>delete novo[k]);
+      /* a oficina só edita a descrição: o título acompanha apenas se era a própria descrição */
+      if(colE==='os'&&rec.titulo!==rec.desc)delete novo.titulo;
+      Object.assign(rec,novo);
       /* carga já paga: o título no Financeiro precisa acompanhar peso, umidade, NF e preço */
       if(colE==='cargas'){const t=db.fin.find(fx=>fx.cargaId===rec.id);
         if(t){const data=t.data;Object.assign(t,finCarga(rec));t.data=data;t.status=rec.pago?'realizado':'previsto';}}}
@@ -3108,7 +3144,10 @@ $main.addEventListener('click',async e=>{
       [...fEd.elements].forEach(el=>{
         if(!el.name)return;
         if(el.type==='checkbox'){el.checked=!!rec[el.name];return;}
-        const v=rec[el.name];if(v!==undefined&&v!==null)el.value=v;
+        const v=rec[el.name];if(v===undefined||v===null)return;
+        /* valor fora da lista (ex.: tipo "Serviço" vindo das Ordens) ganha opção própria, senão viraria "" ao salvar */
+        if(el.tagName==='SELECT'&&v!==''&&![...el.options].some(o=>o.value===String(v)))el.add(new Option(String(v),String(v)));
+        el.value=v;
       });
       if(fid==='f-cafe'){
         if(fEd.elements.unidade)fEd.elements.unidade.value='litro';
