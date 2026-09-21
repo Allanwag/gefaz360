@@ -7,13 +7,15 @@ const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
 // Executa os handlers reais; somente APIs do navegador e renderização são simuladas.
 function setup(initial=null){
   const events={},storage=new Map(initial===null?[]:[['pvgest-erp-v1',initial]]),files=new Map();
-  const elements=new Map();
-  const window={addEventListener(){}};window.top=window;window.self=window;
+  const elements=new Map(),intervals=[];
+  const window={addEventListener(){},scrollY:0,scrollTo(){}};window.top=window;window.self=window;
   const context=vm.createContext({window,document:{getElementById(id){
     if(!elements.has(id))elements.set(id,{addEventListener:(type,fn)=>events[id+':'+type]=fn,style:{}});
     return elements.get(id);
   },addEventListener(){}},location:{hash:'#dash'},localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)},
-  Blob,atob,Uint8Array,setTimeout,clearTimeout,confirm:()=>true,files,navigator:{}});
+  Blob,atob,Uint8Array,setTimeout,clearTimeout,confirm:()=>true,files,navigator:{},
+  // intervalos ficam registrados sem rodar: os testes os disparam à mão (e o processo não fica preso)
+  setInterval:fn=>intervals.push(fn)});
   // O render() de nível superior é o único no início de linha; código depois dele (ex.: registro do
   // service worker) não pode impedir a troca pelos stubs.
   const boot=/^render\(\);\r?$/m;assert.match(source,boot,'app.js precisa terminar a inicialização com render(); em linha própria');
@@ -26,7 +28,7 @@ function setup(initial=null){
     for(const el of elements)elements[el.name]=el;
     return events['main:submit']({preventDefault(){},target:{id,elements,dataset:editId?{editId}:{},hasAttribute:()=>false}});
   };
-  return {run,click,submit,storage,files,elements};
+  return {run,click,submit,storage,files,elements,intervals};
 }
 function importFixture(){
   const a=setup();
@@ -213,4 +215,37 @@ test('cadastros não quebram com talhão sem cultura e escapam a cultura',()=>{
   const a=setup();a.run("db.talhoes.push({id:'tx',nome:'Sem cultura',area:1},{id:'ty',nome:'Estranho',cultura:'<b>x</b>',area:1})");
   const html=a.run('pgConfig()');assert.match(html,/Sem cultura<\/td><td>—/);assert.match(html,/&lt;b&gt;x&lt;\/b&gt;/);
   assert.match(a.run('BRL(1234.5)'),/1\.235$/);
+});
+
+// Simula a tela aberta desde 01/01/2020: o relógio real já está em outro dia.
+const ontem="hoje='2020-01-01';mesAtual='2020-01';";
+
+test('virada do dia atualiza hoje, mês e safra corrente e redesenha a tela',()=>{
+  const a=setup();const real=a.run('isoLocal(new Date())');assert.equal(a.intervals.length,1);
+  a.run(ontem+"anoFiltro=safraDe(hoje);globalThis.renders=0;render=()=>{renders++};formularioEmUso=()=>false;");
+  a.intervals[0]();
+  assert.equal(a.run('hoje'),real);assert.equal(a.run('mesAtual'),real.slice(0,7));
+  assert.equal(a.run('anoFiltro'),a.run('safraDe(hoje)'));assert.equal(a.run('renders'),1);
+  a.intervals[0]();assert.equal(a.run('renders'),1,'sem virada de dia, sem redesenho');
+});
+
+test('virada do dia preserva safra escolhida, digitação e registro em edição',()=>{
+  const a=setup();const real=a.run('isoLocal(new Date())');
+  a.run(ontem+`anoFiltro='2018/19';globalThis.renders=0;render=()=>{renders++};formularioEmUso=()=>true;
+    globalThis.campos=[{value:'2020-01-01',defaultValue:'2020-01-01',form:{dataset:{}}},
+      {value:'2019-12-31',defaultValue:'2020-01-01',form:{dataset:{}}},
+      {value:'2020-01-01',defaultValue:'2020-01-01',form:{dataset:{editId:'x'}}}];$main.querySelectorAll=()=>campos;`);
+  a.intervals[0]();
+  assert.equal(a.run('renders'),0,'não redesenha por cima do formulário');assert.equal(a.run('anoFiltro'),'2018/19');
+  assert.equal(a.run('campos[0].value'),real,'data ainda no padrão avança');
+  assert.equal(a.run('campos[1].value'),'2019-12-31','data digitada fica');
+  assert.equal(a.run('campos[2].value'),'2020-01-01','registro em edição fica');
+});
+
+test('ações usam a data real mesmo com a tela aberta desde ontem',async()=>{
+  const a=setup();const real=a.run('isoLocal(new Date())');
+  a.run(ontem+'db.chuvas=[];');await a.submit('f-chuva',{data:real,mm:5,obs:''});
+  assert.equal(a.run('db.chuvas.length'),1,'a chuva de hoje não é recusada como "data futura"');
+  a.run(ontem+"db.cargas=[{id:'k1',cultura:'soja',data:'2026-09-01',talhaoId:'s1',nf:'1',bruto:40000,tara:15000,umidade:13,preco:120,pago:false}];db.fin=[];");
+  await a.click('pago',null,'k1');assert.equal(a.run('db.fin[0].data'),real);
 });

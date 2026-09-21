@@ -439,8 +439,9 @@ const hasCoords=m=>m&&m.lat!==null&&m.lat!==undefined&&m.lat!==''&&m.lon!==null&
   Number.isFinite(Number(m.lat))&&Number.isFinite(Number(m.lon));
 /* data real do computador, em fuso local (toISOString devolveria UTC e viraria o dia à noite) */
 const isoLocal=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-const hoje=isoLocal(new Date());
-const mesAtual=hoje.slice(0,7);
+/* let, não const: o app instalado fica aberto de um dia para o outro — ver atualizaHoje() */
+let hoje=isoLocal(new Date());
+let mesAtual=hoje.slice(0,7);
 const mesNome=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
 /* cargas: peso líquido corrigido por umidade (base 14%) e sacas de 60 kg */
 function cargaCalc(c){
@@ -485,6 +486,14 @@ const safraPeriodo=s=>{const mi=db.params.mesInicioSafra||10,ini=+String(s).slic
 /* filtro de safra global: '' = todas; 'AAAA/AA' filtra pela safra do campo de data.
    Abre na safra corrente: com histórico de várias safras, somar todas daria sc/ha sem sentido. */
 let anoFiltro=safraDe(hoje);
+/* avança "hoje" se o relógio virou o dia e devolve a data anterior ('' se nada mudou).
+   O filtro de safra só acompanha se estava na safra corrente — escolha manual é preservada. */
+function atualizaHoje(){
+  const novo=isoLocal(new Date());if(novo===hoje)return '';
+  const antigo=hoje;hoje=novo;mesAtual=novo.slice(0,7);
+  if(anoFiltro&&anoFiltro===safraDe(antigo))anoFiltro=safraDe(novo);
+  return antigo;
+}
 const F=(arr,k='data')=>anoFiltro?arr.filter(x=>safraDe(x[k])===anoFiltro):arr;
 const somaCargas=cult=>F(db.cargas).filter(c=>c.cultura===cult)
   .reduce((a,c)=>{const x=cargaCalc(c);a.sacas+=x.sacas;a.valor+=x.valor;if(!c.pago)a.aberto+=x.valor;return a;},{sacas:0,valor:0,aberto:0});
@@ -2716,6 +2725,7 @@ function validateForm(f){
 }
 
 function render(){
+  atualizaHoje();
   if(loadError){
     $nav.innerHTML='';document.getElementById('safraBox').innerHTML='';
     $main.innerHTML=`<h1>Recuperar dados</h1><div class="panel"><p>Não foi possível abrir o banco existente. Os registros originais foram mantidos e os lançamentos estão bloqueados.</p><p>${esc(loadError)}</p><button class="btn" data-action="export-unread">Baixar dados originais</button> <button class="btn" data-action="restore-backup">Restaurar ponto de recuperação</button><p><label>Importar backup válido <input id="recover-import" type="file" accept="application/json,.json"></label></p><p id="recover-msg" role="status"></p></div>`;
@@ -2845,7 +2855,7 @@ $main.addEventListener('change',e=>{
 const val=(f,n)=>f.elements[n]?f.elements[n].value.trim():'';
 const num=(f,n)=>parseFloat(f.elements[n]?.value)||0;
 $main.addEventListener('submit',async e=>{
-  e.preventDefault();const f=e.target;
+  e.preventDefault();const f=e.target;atualizaHoje();
   if(loadError)return;
   if(f.hasAttribute('data-passive-form'))return;
   const wasEditing=!!f.dataset.editId;
@@ -3044,7 +3054,7 @@ function deleteBlock(col,id){
 function recordName(rec){return String(rec?.nome||rec?.codigo||rec?.titulo||rec?.desc||rec?.nf||rec?.data||'registro').slice(0,90);}
 
 $main.addEventListener('click',async e=>{
-  const b=e.target.closest('[data-action]');if(!b)return;
+  const b=e.target.closest('[data-action]');if(!b)return;atualizaHoje();
   const a=b.dataset.action,id=b.dataset.id;
   if(a==='export-unread'){
     const raw=unreadDatabase??localStorage.getItem(LS);
@@ -3344,6 +3354,28 @@ window.addEventListener('storage',e=>{
     catch(err){showStatus('Outra aba tentou gravar dados inválidos; esta cópia foi preservada.',{timeout:0});}
   }
 });
+
+/* virada do dia com o app aberto: redesenha a tela (datas padrão, atrasos, carência), mas nunca por
+   cima do que o usuário está digitando — nesse caso só avançam os campos de data ainda no valor padrão */
+function formularioEmUso(){
+  const ativo=document.activeElement;
+  if(ativo&&$main.contains(ativo)&&ativo.matches('input,select,textarea'))return true;
+  const padrao=s=>{let i=-1;[...s.options].forEach((o,k)=>{if(o.defaultSelected)i=k;});return i<0&&s.options.length?0:i;};
+  return [...$main.querySelectorAll('form')].some(f=>f.dataset.editId)||
+    [...$main.querySelectorAll('input,select,textarea')].some(el=>
+      el.type==='checkbox'||el.type==='radio'?el.checked!==el.defaultChecked:
+      el.tagName==='SELECT'?el.selectedIndex!==padrao(el):el.value!==el.defaultValue);
+}
+function virouDia(){
+  const antigo=atualizaHoje();if(!antigo)return;
+  if(!formularioEmUso()){const y=window.scrollY;render();window.scrollTo(0,y);return;}
+  $main.querySelectorAll('input[type="date"]').forEach(el=>{
+    if(el.form?.dataset.editId||el.value!==antigo||el.defaultValue!==antigo)return;
+    el.defaultValue=hoje;el.value=hoje;
+  });
+}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')virouDia();});
+setInterval(virouDia,60000);
 
 /* tooltip */
 const tip=document.getElementById('tip');
