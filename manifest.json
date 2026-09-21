@@ -1,0 +1,15 @@
+{
+  "name": "Gefaz360 — Gestão da Fazenda",
+  "short_name": "Gefaz360",
+  "description": "ERP da fazenda: safra, café, cereais, cargas, financeiro, oficina, combustíveis e estoque.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f7f4",
+  "theme_color": "#1b7f37",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

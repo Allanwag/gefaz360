@@ -3317,3 +3317,6 @@ document.addEventListener('mousemove',e=>{
 
 if(!location.hash)history.replaceState(null,'','#dash');
 render();
+
+/* instalável (PWA): service worker com rede primeiro e cache offline */
+if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
