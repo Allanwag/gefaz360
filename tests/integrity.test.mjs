@@ -22,7 +22,8 @@ function setup(initial=null){
   vm.runInContext(source.replace(boot,
     'globalThis.realRender=render;render=()=>{};showStatus=()=>{};clearFormError=()=>{};showFormError=(f,e)=>{globalThis.errors=e};filePut=async(id,blob)=>files.set(id,blob);fileGet=async id=>files.get(id);fileDel=async id=>files.delete(id);'),context);
   const run=s=>vm.runInContext(s,context);
-  const click=async(action,col,id)=>events['main:click']({target:{closest:()=>({dataset:{action,col,id}})}});
+  // extra: propriedades do botão clicado (ex.: closest() até a linha da tabela)
+  const click=async(action,col,id,extra={})=>events['main:click']({target:{closest:()=>({dataset:{action,col,id},...extra})}});
   const submit=async(id,values,editId)=>{
     const elements=Object.entries(values).map(([name,value])=>({name,value:String(value),tagName:'INPUT',type:'text',labels:[]}));
     for(const el of elements)elements[el.name]=el;
@@ -248,4 +249,121 @@ test('ações usam a data real mesmo com a tela aberta desde ontem',async()=>{
   assert.equal(a.run('db.chuvas.length'),1,'a chuva de hoje não é recusada como "data futura"');
   a.run(ontem+"db.cargas=[{id:'k1',cultura:'soja',data:'2026-09-01',talhaoId:'s1',nf:'1',bruto:40000,tara:15000,umidade:13,preco:120,pago:false}];db.fin=[];");
   await a.click('pago',null,'k1');assert.equal(a.run('db.fin[0].data'),real);
+});
+
+// Revisão de 23/09/2026 — cada teste reproduz um defeito encontrado no app publicado.
+// Botão "Concluir aplicação" com o campo de data da mesma linha preenchido.
+const linhaComData=data=>({closest:()=>({querySelector:()=>({value:data})})});
+
+test('carência conta do dia da aplicação, não da data planejada da ordem',async()=>{
+  const a=setup();const hoje=a.run('hoje');
+  const id=a.run("db.pulvOS.find(o=>o.status==='aberta'&&o.talhaoId==='c2').id");
+  assert.equal(a.run(`db.pulvOS.find(o=>o.id==='${id}').data`),'2026-07-18','ordem de exemplo planejada no passado');
+  await a.click('concluir-pos',null,id,linhaComData(a.run('addDias(hoje,1)')));
+  assert.equal(a.run(`db.pulvOS.find(o=>o.id==='${id}').status`),'aberta','dia futuro é recusado');
+  await a.click('concluir-pos',null,id,linhaComData(hoje));
+  const o=a.run(`db.pulvOS.find(o=>o.id==='${id}')`);assert.equal(o.status,'concluida');assert.equal(o.dataAplicacao,hoje);
+  assert.equal(a.run("statusCarencia('c2')?.libera"),a.run('addDias(hoje,30)'),'fungicida de 30 dias bloqueia a colheita a partir de hoje');
+  assert.equal(a.run(`db.fin.find(f=>f.pulvOSId==='${id}').data`),hoje);
+  a.run("imprimir=h=>{globalThis.impresso=h};cadernoCampo('c2')");
+  assert.ok(a.run('impresso').includes(`${a.run('dBRy(hoje)')}</td><td>Aplicação`),'o caderno de campo registra o dia da aplicação');
+});
+
+test('ordem concluída antes do campo de aplicação usa o dia em que foi concluída no sistema',()=>{
+  const a=setup();
+  a.run(`const o=db.pulvOS.find(o=>o.talhaoId==='c2');o.status='concluida';
+    db.fin.push({id:'custo',data:'2026-09-20',tipo:'saida',categoria:'Defensivos',centro:'Cafe',desc:'Aplicação',valor:1,status:'realizado',pulvOSId:o.id});save();`);
+  const b=setup(a.storage.get('pvgest-erp-v1'));
+  assert.equal(b.run("db.pulvOS.find(o=>o.talhaoId==='c2').dataAplicacao"),'2026-09-20');
+  assert.equal(b.run("db.pulvOS.find(o=>o.talhaoId==='c1').dataAplicacao"),'2026-06-20','sem custo vinculado, vale a data da ordem');
+});
+
+test('carência em branco fica "não informada" e é avisada ao concluir a aplicação',async()=>{
+  const a=setup();
+  await a.submit('f-def',{nome:'Produto novo',classe:'Fungicida',unidade:'L',preco:10,qtd:100,min:0,carencia:'',reentrada:0});
+  assert.equal(a.run('db.defensivos.at(-1).carencia'),null);assert.match(a.run('pgPvgest()'),/não informada/);
+  a.run(`globalThis.perguntas=[];confirm=m=>{perguntas.push(m);return true};const p=db.defensivos.at(-1);
+    db.receitas.push({id:'r-novo',nome:'Nova',itens:[{prodId:p.id,dose:1}]});
+    db.pulvOS.push({id:'o-novo',data:hoje,talhaoId:'c3',receitaId:'r-novo',area:1,status:'aberta'});`);
+  await a.click('concluir-pos',null,'o-novo');
+  assert.match(a.run('perguntas.at(-1)'),/Produto novo sem carência cadastrada/);
+});
+
+test('o que os formulários aceitam passa na validação estrita: Desfazer e backup continuam funcionando',async()=>{
+  const a=setup();a.run('showStatus=m=>{globalThis.ultimoStatus=m}');
+  await a.submit('f-regap',{data:'2026-09-20',maquinaId:'',velocidade:6,rpm:540,bico:'ATR',numBicos:36,vazaoHa:400,vazaoBico:2,obs:''});
+  await a.submit('f-regcol',{data:'2026-09-20',ano:2026,talhaoId:'',variedade:'',tipo:'Árvore',maquinaId:'',vibracao:800,velocidade:1,freio:0,obs:''});
+  await a.submit('f-mip',{data:'2026-09-20',talhaoId:'',tipo:'Ferrugem',nivel:2,lat:'',lon:'',obs:''});
+  assert.deepEqual([a.run('db.regAplicacao.length'),a.run('db.regColheita.length'),a.run('db.mip.length')],[2,3,1]);
+  assert.doesNotThrow(()=>a.run('normalizeDatabase(JSON.parse(JSON.stringify(db)),{strict:true})'));
+  await a.submit('f-chuva',{data:'2026-09-20',mm:10,obs:''});const chuvas=a.run('db.chuvas.length');
+  await a.run('undoLast()');assert.equal(a.run('db.chuvas.length'),chuvas-1,a.run('globalThis.ultimoStatus'));
+  await a.run(`importBackupPayload(${a.run("JSON.stringify({format:'gefaz360-backup',version:4,db,files:[]})")})`);
+  assert.equal(a.run('db.regAplicacao.length'),2,'o próprio backup volta a importar');
+});
+
+test('formulário recusa referência obrigatória vazia ou apagada e coordenada MIP pela metade',async()=>{
+  const a=setup();const antes=a.run('db.cafe.length');
+  const cafe=talhaoId=>({data:'2026-09-20',talhaoId,tipo:'Manual (pano)',qtd:100,unidade:'litro',colhedores:0,horas:0,valorMedida:9});
+  a.run('globalThis.errors=null');await a.submit('f-cafe',cafe(''));assert.match(a.run('errors[0].message'),/talhaoId é obrigatório/);
+  a.run('globalThis.errors=null');await a.submit('f-cafe',cafe('apagado'));assert.match(a.run('errors[0].message'),/não existe mais/);
+  assert.equal(a.run('db.cafe.length'),antes);
+  a.run('globalThis.errors=null');await a.submit('f-mip',{data:'2026-09-20',talhaoId:'c1',tipo:'Ferrugem',nivel:2,lat:'-19.1',lon:'',obs:''});
+  assert.equal(a.run('db.mip.length'),0);assert.match(a.run('errors[0].message'),/latitude e longitude juntas/);
+});
+
+test('banco com MIP pela metade é consertado ao carregar e passa na validação estrita',()=>{
+  const a=setup();a.run("db.mip=[{id:'m1',data:'2026-09-20',talhaoId:'c1',tipo:'Ferrugem',nivel:2,lat:-19.1,lon:null,obs:'saia'}];save()");
+  const b=setup(a.storage.get('pvgest-erp-v1'));
+  assert.equal(b.run('db.mip[0].lat'),null);assert.equal(b.run('db.mip[0].obs'),'saia · latitude -19.1 sem longitude');
+  assert.doesNotThrow(()=>b.run('normalizeDatabase(JSON.parse(JSON.stringify(db)),{strict:true})'));
+});
+
+test('mapa em UTM é recusado na importação em vez de travar o backup depois',async()=>{
+  const a=setup();
+  const utm={type:'Feature',properties:{name:'Santa Rita'},geometry:{type:'Polygon',coordinates:[[[500000,7800000],[500100,7800000],[500100,7800100],[500000,7800000]]]}};
+  await a.run(`lerArquivoMapa({size:100,name:'talhoes.geojson',text:async()=>${JSON.stringify(JSON.stringify(utm))}})`);
+  assert.equal(a.run('mapaPreview'),null);assert.match(a.run('mapaErro'),/WGS 84/);
+});
+
+test('dar baixa num título de carga recebe a carga e não conta o valor duas vezes',async()=>{
+  const a=setup();
+  assert.equal(a.run('db.cargas.filter(c=>c.pago).length'),a.run('seed().cargas.filter(c=>c.pago).length'),'o conserto não mexe no exemplo');
+  const id=a.run("db.fin.find(f=>f.cargaId&&f.status==='previsto').id"),cargaId=a.run(`db.fin.find(f=>f.id==='${id}').cargaId`);
+  await a.click('baixa',null,id);
+  assert.equal(a.run(`db.cargas.find(c=>c.id==='${cargaId}').pago`),true);
+  assert.equal(a.run(`db.fin.filter(f=>f.cargaId==='${cargaId}').map(f=>f.status).join()`),'realizado');
+});
+
+test('banco com título de carga baixado e carga pendente é consertado ao carregar',()=>{
+  const a=setup();a.run("const f=db.fin.find(f=>f.cargaId&&f.status==='previsto');f.status='realizado';globalThis.alvo=f.cargaId;save()");
+  const b=setup(a.storage.get('pvgest-erp-v1'));
+  assert.equal(b.run(`db.cargas.find(c=>c.id===${JSON.stringify(a.run('alvo'))}).pago`),true);
+});
+
+test('textos importados saem escapados em todas as páginas, no caderno e no KML',async()=>{
+  const a=setup();const P='"\'><i/id=inj>';
+  a.run(`const P=${JSON.stringify(P)};anoFiltro='';
+    db.talhoes.push({id:'tx',nome:'X',cultura:P,area:P,variedade:P});
+    db.lotes.push({id:'lx',codigo:P,data:'2026-09-01',talhaoId:'c1',origem:P,status:P,carretas:P},
+      {id:'lx2',codigo:P,data:'2026-09-01',talhaoId:'c1',origem:'Árvore',status:'terreiro'});
+    db.func.push({id:'fx',nome:'F',funcao:'f',tipo:P,valor:P});
+    db.estoque.push({id:'ex',nome:'E',cat:'Peça',qtd:0,min:1,local:'',resp:P});
+    db.coberturas.push({id:'cx',data:'2026-09-01',talhaoId:'c1',especie:P,operacao:P,area:1,obs:''});
+    db.defensivos.push({id:'dx',nome:P,classe:'Fungicida',unidade:'L',preco:1,qtd:0,min:1,carencia:30,reentrada:24});
+    db.adubacoes.push({id:'ax',data:'2026-09-01',talhaoId:'c1',operacao:P,produto:'x',dose:1,unidade:'kg/ha',area:1,obs:''});
+    db.arruacoes.push({id:'rx',data:'2026-09-01',talhaoId:'c1',tipo:P,area:1,obs:''});
+    db.bienal.push({id:'bx',talhaoId:'c1',safra:safraDe(hoje),carga:P,obs:''});
+    db.mip.push({id:'mx',data:P,talhaoId:'c1',tipo:'t',nivel:P,lat:-19,lon:-45,obs:''});
+    db.geoTalhoes.push({id:'gx',talhaoId:'tx',nome:'g',cultura:'',coords:[[-45,-19],[-45.1,-19],[-45.1,-19.1]],areaHa:1});
+    db.documentos.push({id:'docx',data:'2026-09-01',nome:'n',categoria:P,mime:'image/png',size:1});
+    db.cafe.push({id:'kx',data:'2026-09-01',talhaoId:'c1',tipo:'Manual (pano)',litros:100,colhedores:P,valorMedida:9});
+    db.regColheita.push({id:'gx2',data:'2026-09-01',ano:P,talhaoId:'c1',tipo:'Árvore',maquinaId:'',vibracao:1,velocidade:1,obs:''});
+    imprimir=h=>{globalThis.impresso=h};downloadBlob=b=>{globalThis.kml=b};`);
+  for(const pg of a.run('Object.keys(PAGES)'))for(const t of pg==='talhao'?['c1','tx']:['']){
+    if(t)a.run(`talhaoSel='${t}'`);
+    assert.ok(!a.run(`PAGES['${pg}']()`).includes('<i/id=inj>'),`página ${pg}${t?' ('+t+')':''} deixou texto cru`);
+  }
+  for(const t of ['c1','tx']){a.run(`cadernoCampo('${t}')`);assert.ok(!a.run('impresso').includes('<i/id=inj>'),`caderno ${t}`);}
+  a.run('exportarKML()');assert.ok(!(await a.run('kml.text()')).includes('<i/id=inj>'),'KML exportado');
 });

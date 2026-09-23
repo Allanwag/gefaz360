@@ -331,6 +331,23 @@ function normalizeOperationalOrders(next,{strict=false}={}){
       realizado:Math.max(0,Number(item?.realizado)||0),status:OS_STATUS.includes(item?.status)?item.status:o.status}));
   });
 }
+/* [coleção, campo, coleção-alvo, opcional]. A mesma tabela valida o banco (modo estrito) e os formulários
+   (validateForm): o que a tela deixa gravar precisa passar na importação, no Desfazer e na recuperação.
+   Regulagens sem talhão/máquina e MIP sem talhão são opcionais porque os formulários oferecem "—". */
+const REFS=[
+  ['cafe','talhaoId','talhoes',false],['cargas','talhaoId','talhoes',false],['apont','funcId','func',false],
+  ['os','maqId','maquinas',true],['os','talhaoId','talhoes',true],['os','responsavelId','func',true],
+  ['medicoes','talhaoId','talhoes',false],['medicoes','funcId','func',false],
+  ['pulvOS','talhaoId','talhoes',false],['pulvOS','receitaId','receitas',false],['regColheita','talhaoId','talhoes',true],
+  ['regColheita','maquinaId','maquinas',true],['regAplicacao','maquinaId','maquinas',true],['lotes','talhaoId','talhoes',false],
+  ['secagens','loteId','lotes',false],['coberturas','talhaoId','talhoes',false],['abastecimentos','maqId','maquinas',false],
+  ['lembretes','maqId','maquinas',false],['vendasCafe','loteId','lotes',true],['solos','talhaoId','talhoes',false],
+  ['adubacoes','talhaoId','talhoes',false],['podas','talhaoId','talhoes',false],['arruacoes','talhaoId','talhoes',false],
+  ['capinas','talhaoId','talhoes',false],['documentos','talhaoId','talhoes',true],['geoTalhoes','talhaoId','talhoes',true],
+  ['mip','talhaoId','talhoes',true],['bienal','talhaoId','talhoes',false],['fin','cargaId','cargas',true],
+  ['fin','vendaId','vendasCafe',true],['fin','pulvOSId','pulvOS',true]
+];
+const temValor=v=>v!==null&&v!==undefined&&v!=='';
 function validateDatabaseIntegrity(data){
   const ids={};
   DB_ARRAYS.forEach(k=>{
@@ -340,21 +357,8 @@ function validateDatabaseIntegrity(data){
       if(ids[k].has(item.id))throw new Error(`Identificador duplicado em ${k}: ${item.id}.`);ids[k].add(item.id);
     });
   });
-  const refs=[
-    ['cafe','talhaoId','talhoes',false],['cargas','talhaoId','talhoes',false],['apont','funcId','func',false],
-    ['os','maqId','maquinas',true],['os','talhaoId','talhoes',true],['os','responsavelId','func',true],
-    ['medicoes','talhaoId','talhoes',false],['medicoes','funcId','func',false],
-    ['pulvOS','talhaoId','talhoes',false],['pulvOS','receitaId','receitas',false],['regColheita','talhaoId','talhoes',false],
-    ['regColheita','maquinaId','maquinas',true],['regAplicacao','maquinaId','maquinas',false],['lotes','talhaoId','talhoes',false],
-    ['secagens','loteId','lotes',false],['coberturas','talhaoId','talhoes',false],['abastecimentos','maqId','maquinas',false],
-    ['lembretes','maqId','maquinas',false],['vendasCafe','loteId','lotes',true],['solos','talhaoId','talhoes',false],
-    ['adubacoes','talhaoId','talhoes',false],['podas','talhaoId','talhoes',false],['arruacoes','talhaoId','talhoes',false],
-    ['capinas','talhaoId','talhoes',false],['documentos','talhaoId','talhoes',true],['geoTalhoes','talhaoId','talhoes',true],
-    ['mip','talhaoId','talhoes',false],['bienal','talhaoId','talhoes',false],['fin','cargaId','cargas',true],
-    ['fin','vendaId','vendasCafe',true],['fin','pulvOSId','pulvOS',true]
-  ];
-  refs.forEach(([collection,field,target,optional])=>data[collection].forEach((item,i)=>{
-    const value=item[field];if((value===undefined||value===null||value==='')&&optional)return;
+  REFS.forEach(([collection,field,target,optional])=>data[collection].forEach((item,i)=>{
+    const value=item[field];if(!temValor(value)&&optional)return;
     if(!ids[target].has(value))throw new Error(`Referência inválida em ${collection}, posição ${i+1}: ${field}.`);
   }));
   data.receitas.forEach((r,i)=>(r.itens||[]).forEach(item=>{if(!ids.defensivos.has(item.prodId))throw new Error(`Produto inválido na receita ${i+1}.`);}));
@@ -376,7 +380,7 @@ function validateDatabaseIntegrity(data){
       !Number.isFinite(Number(c[0]))||!Number.isFinite(Number(c[1]))||Number(c[0])< -180||Number(c[0])>180||Number(c[1])< -90||Number(c[1])>90))
       throw new Error(`Geometria inválida no polígono ${i+1}.`);
   });
-  data.mip.forEach((m,i)=>{const hasLat=m.lat!==null&&m.lat!==undefined&&m.lat!=='',hasLon=m.lon!==null&&m.lon!==undefined&&m.lon!=='';
+  data.mip.forEach((m,i)=>{const hasLat=temValor(m.lat),hasLon=temValor(m.lon);
     if(hasLat!==hasLon||(hasLat&&(!Number.isFinite(Number(m.lat))||!Number.isFinite(Number(m.lon))||Number(m.lat)< -90||Number(m.lat)>90||Number(m.lon)< -180||Number(m.lon)>180)))
       throw new Error(`Coordenadas MIP inválidas na posição ${i+1}.`);});
   const totalBeneficiado=data.lotes.reduce((s,l)=>s+(Number(l.sacas)||0),0),totalVendido=data.vendasCafe.reduce((s,v)=>s+(Number(v.sacas)||0),0);
@@ -406,8 +410,31 @@ function normalizeDatabase(raw,{strict=false}={}){
   next.medicoes.forEach(r=>{if(r.tipo==='Derriça (árvore)')r.tipo='Manual (pano)';});
   /* a migração de vínculos é heurística (procura NFs no texto): roda uma única vez, só em bancos
      gravados antes da v4. Rodar em todo carregamento reescrevia lançamentos manuais novos. */
-  normalizeOperationalOrders(next,{strict});if(!(Number(raw.version)>=4))migrateLegacyLinks(next);if(strict)validateDatabaseIntegrity(next);
+  normalizeOperationalOrders(next,{strict});if(!(Number(raw.version)>=4))migrateLegacyLinks(next);
+  repairDatabase(next);if(strict)validateDatabaseIntegrity(next);
   return next;
+}
+/* conserta estados que versões anteriores deixavam gravar; idempotente, roda em todo carregamento */
+function repairDatabase(next){
+  /* ordem de pulverização concluída antes de existir a data da aplicação: vale o dia em que foi concluída
+     no sistema (data do custo no Financeiro). A aplicação não pode ter sido depois disso, então a carência
+     contada daí nunca libera o talhão antes da hora. */
+  next.pulvOS.forEach(o=>{
+    if(o.status!=='concluida'||o.dataAplicacao)return;
+    const custo=next.fin.find(f=>f.pulvOSId===o.id);o.dataAplicacao=String(custo?.data||o.data||'');
+  });
+  /* título de carga e carga precisam concordar: "Dar baixa" no título não marcava a carga e o valor contava
+     duas vezes (no saldo e no a receber). Recebido de um lado vale para os dois. */
+  next.fin.forEach(f=>{
+    const c=f.cargaId&&next.cargas.find(x=>x.id===f.cargaId);if(!c)return;
+    if(f.status==='realizado'&&!c.pago)c.pago=true;else if(c.pago&&f.status!=='realizado')f.status='realizado';
+  });
+  /* coordenada MIP pela metade (a tela aceitava só a latitude): o valor vira anotação em vez de sumir */
+  next.mip.forEach(m=>{
+    const lat=temValor(m.lat),lon=temValor(m.lon);if(lat===lon)return;
+    m.obs=[m.obs,lat?`latitude ${m.lat} sem longitude`:`longitude ${m.lon} sem latitude`].filter(Boolean).join(' · ');
+    m.lat=null;m.lon=null;
+  });
 }
 
 let db,loadError='',unreadDatabase=null;
@@ -428,11 +455,14 @@ const save=(value=db,{recover=false}={})=>{try{
 
 /* ============ util ============ */
 /* minimumFractionDigits explícito: sem ele, navegadores anteriores ao Intl de 2023 lançam RangeError (máx. 0 < mín. 2 do BRL) */
-const BRL=v=>(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',minimumFractionDigits:0,maximumFractionDigits:0});
-const BRL2=v=>(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
-const N=(v,d=0)=>(v||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});
-const dBR=s=>{const[y,m,d]=String(s||'').split('-');return y&&m&&d?d+'/'+m:'—';};
-const dBRy=s=>{const[y,m,d]=String(s||'').split('-');return y&&m&&d?d+'/'+m+'/'+y.slice(2):'—';};
+/* Number(): um texto num campo numérico (backup importado) sairia cru no HTML — String#toLocaleString ignora o formato */
+const BRL=v=>(Number(v)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',minimumFractionDigits:0,maximumFractionDigits:0});
+const BRL2=v=>(Number(v)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const N=(v,d=0)=>(Number(v)||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});
+/* só datas AAAA-MM-DD (com ou sem hora) viram dd/mm; o resto vira "—" em vez de ir cru para o HTML */
+const ISO_DIA=/^(\d{4})-(\d{2})-(\d{2})/;
+const dBR=s=>{const m=ISO_DIA.exec(String(s||''));return m?m[3]+'/'+m[2]:'—';};
+const dBRy=s=>{const m=ISO_DIA.exec(String(s||''));return m?m[3]+'/'+m[2]+'/'+m[1].slice(2):'—';};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const tal=id=>db.talhoes.find(t=>t.id===id)||{nome:'—',area:0};
 const hasCoords=m=>m&&m.lat!==null&&m.lat!==undefined&&m.lat!==''&&m.lon!==null&&m.lon!==undefined&&m.lon!==''&&
@@ -788,7 +818,7 @@ function pgCafe(){
     ${cafeF.slice().sort((a,b)=>a.data<b.data?1:-1).map(r=>`<tr>
       <td>${dBRy(r.data)}</td><td>${esc(tal(r.talhaoId).nome)}</td><td>${esc(r.tipo)}</td>
       <td class="num">${N(r.litros/LC,1)}</td><td class="num">${N(r.litros)}</td>
-      <td class="num">${r.colhedores||'—'}</td><td class="num">${r.colhedores?N(r.litros/r.colhedores,0):'—'}</td>
+      <td class="num">${r.colhedores?N(r.colhedores):'—'}</td><td class="num">${r.colhedores?N(r.litros/r.colhedores,0):'—'}</td>
       <td class="num" ${r.horas?`data-tip="${N(r.litros/LC/r.horas,2)} carretas/h"`:''}>${r.horas?N(r.horas,1)+' h':'—'}</td>
       <td class="num">${BRL(r.litros/p.litrosPorMedida*r.valorMedida)}</td>
       <td><button class="x" data-action="del" data-col="cafe" data-id="${r.id}" title="Excluir">✕</button></td></tr>`).join('')}
@@ -811,7 +841,7 @@ function pgCafe(){
     <p class="note">Registre a regulagem que funcionou em cada talhão/condição — vira histórico consultável na próxima safra (vibração da derriçadora na colheita de árvore; escova, peneira e ventilador na recolhedora de chão).</p></div>
   <div class="tblwrap"><table><thead><tr><th>Data</th><th class="num">Ano</th><th>Talhão</th><th>Variedade</th><th>Tipo</th><th>Máquina</th><th class="num">Vibração/RPM</th><th class="num">Veloc.</th><th class="num">Freio</th><th>Observações</th><th></th></tr></thead><tbody>
     ${db.regColheita.slice().sort((a,b)=>a.data<b.data?1:-1).map(g=>`<tr>
-      <td>${dBRy(g.data)}</td><td class="num">${g.ano||g.data.slice(0,4)}</td>
+      <td>${dBRy(g.data)}</td><td class="num">${esc(g.ano||String(g.data||'').slice(0,4))}</td>
       <td>${g.talhaoId?esc(tal(g.talhaoId).nome):'—'}</td><td>${esc(g.variedade)||'—'}</td>
       <td><span class="pill ${g.tipo==='Árvore'?'good':'warn'}">${esc(g.tipo)}</span></td>
       <td>${esc(maqNome(g.maquinaId))}</td><td class="num">${g.vibracao?N(g.vibracao):'—'}</td>
@@ -945,7 +975,7 @@ function pgRH(){
   </div>
   <div class="tblwrap"><table><thead><tr><th>Nome</th><th>Função</th><th>Vínculo</th><th class="num">R$ base</th><th></th></tr></thead><tbody>
     ${db.func.map(f=>`<tr><td>${esc(f.nome)}</td><td>${esc(f.funcao)}</td>
-      <td><span class="pill ${f.tipo==='fixo'?'good':'warn'}">${f.tipo}</span></td>
+      <td><span class="pill ${f.tipo==='fixo'?'good':'warn'}">${esc(f.tipo)}</span></td>
       <td class="num">${BRL2(f.valor)}${f.tipo==='safrista'?'/dia':'/mês'}</td>
       <td><button class="x" data-action="del" data-col="func" data-id="${f.id}" title="Excluir">✕</button></td></tr>`).join('')}
   </tbody></table></div>
@@ -968,7 +998,7 @@ function pgOficina(){
     ${kpi('OS abertas',abertas.length,abertas.length?'priorize antes do pico da colheita':'nenhuma pendência')}
     ${kpi('Custo manutenção '+mesNome[+mesAtual.slice(5)-1]+'.',BRL(custoJul),'peças + mão de obra')}
     ${kpi('Itens abaixo do mínimo',baixo.length,baixo.length?'gerar pedido de compra':'estoque ok')}
-    ${kpi('Ferramentas emprestadas',emprest.length,emprest.map(i=>i.resp).filter((v,i2,a)=>a.indexOf(v)===i2).join(', ')||'—')}
+    ${kpi('Ferramentas emprestadas',emprest.length,esc(emprest.map(i=>i.resp).filter((v,i2,a)=>a.indexOf(v)===i2).join(', '))||'—')}
   </div>
   <h2>Frota</h2>
   <div class="tblwrap"><table><thead><tr><th>Máquina</th><th>Tipo</th><th class="num">Horímetro</th><th class="num">Próx. revisão</th><th>Status</th><th></th></tr></thead><tbody>
@@ -1209,22 +1239,43 @@ function finCarga(c){const x=cargaCalc(c);
   return {tipo:'entrada',categoria:'Venda de grãos',centro:NOMES_CULT[c.cultura]||c.cultura,
     desc:(NOMES_CULT[c.cultura]||c.cultura)+' — NF '+(c.nf||'s/nº')+' ('+N(x.sacas,0)+' sc)',
     valor:x.valor,status:'realizado',cargaId:c.id};}
+/* recebimento de carga: a carga é a origem e o título no Financeiro acompanha — usado pelo botão da
+   carga e pelo "Dar baixa" do título, para os dois nunca divergirem */
+function marcaRecebimentoCarga(c,pago){
+  c.pago=pago;
+  const linked=db.fin.find(fx=>fx.cargaId===c.id);
+  if(linked){const data=linked.data;Object.assign(linked,finCarga(c));linked.data=c.pago?hoje:data;linked.status=c.pago?'realizado':'previsto';}
+  else db.fin.push(Object.assign({id:uid(),data:c.pago?hoje:c.data},finCarga(c),{status:c.pago?'realizado':'previsto'}));
+}
 /* soma dias a uma data ISO (AAAA-MM-DD) */
 function addDias(iso,d){const dt=new Date(iso+'T12:00:00');dt.setDate(dt.getDate()+d);
   return dt.toISOString().slice(0,10);}
 const diasEntre=(a,b)=>Math.round((new Date(b+'T12:00:00')-new Date(a+'T12:00:00'))/86400000);
+/* carência (dias) e reentrada (h) de uma calda: vale o maior valor entre os produtos */
+function carenciaReceita(r){
+  let dias=0,horas=0,prod='';
+  (r.itens||[]).forEach(i=>{const p=db.defensivos.find(d=>d.id===i.prodId);if(!p)return;
+    const c=Number(p.carencia)||0,h=Number(p.reentrada)||0;
+    if(c>dias){dias=c;prod=p.nome;}
+    if(h>horas)horas=h;});
+  return {dias,horas,prod};
+}
+/* carência em branco (produto importado do PVgest ou cadastrado sem ela) não é carência zero */
+const carenciaNaoInformada=p=>!!p&&!temValor(p.carencia);
+/* dia em que a calda foi aplicada — é dele que a carência conta, não do dia planejado na ordem.
+   Ordens concluídas antes de existir o campo recebem a data em repairDatabase. */
+const dataAplicacao=o=>o.status==='concluida'&&o.dataAplicacao||o.data;
+/* ordens de pulverização da safra filtrada, pela data da aplicação */
+const pulvDaSafra=()=>anoFiltro?db.pulvOS.filter(o=>safraDe(dataAplicacao(o))===anoFiltro):db.pulvOS;
 /* carência/reentrada vigentes de um talhão: olha as aplicações concluídas e a maior carência da calda */
 function statusCarencia(talhaoId,ref){
   ref=ref||hoje;let pior=null;
   db.pulvOS.filter(o=>o.talhaoId===talhaoId&&o.status==='concluida').forEach(o=>{
     const r=db.receitas.find(x=>x.id===o.receitaId);if(!r)return;
-    let dias=0,horas=0,prod='';
-    (r.itens||[]).forEach(i=>{const p=db.defensivos.find(d=>d.id===i.prodId);if(!p)return;
-      if((p.carencia||0)>dias){dias=p.carencia||0;prod=p.nome;}
-      if((p.reentrada||0)>horas)horas=p.reentrada||0;});
-    const libera=addDias(o.data,dias),liberaRe=addDias(o.data,Math.ceil(horas/24));
-    if(dias&&libera>ref&&(!pior||libera>pior.libera))pior={libera,liberaRe,prod,receita:r.nome,data:o.data,dias,horas};
-    else if(!dias&&horas&&liberaRe>ref&&!pior)pior={libera:null,liberaRe,prod,receita:r.nome,data:o.data,dias,horas};
+    const {dias,horas,prod}=carenciaReceita(r),data=dataAplicacao(o);
+    const libera=addDias(data,dias),liberaRe=addDias(data,Math.ceil(horas/24));
+    if(dias&&libera>ref&&(!pior||libera>pior.libera))pior={libera,liberaRe,prod,receita:r.nome,data,dias,horas};
+    else if(!dias&&horas&&liberaRe>ref&&!pior)pior={libera:null,liberaRe,prod,receita:r.nome,data,dias,horas};
   });
   return pior;
 }
@@ -1238,7 +1289,7 @@ function pgPvgest(){
   <div class="cards">
     ${kpi('Ordens abertas',abertas.length,abertas.length?'aguardando janela de aplicação':'nada agendado')}
     ${kpi('Custo aplicado na safra',BRL(custoAplicado),'defensivos das OS concluídas')}
-    ${kpi('Defensivos p/ comprar',baixoD.length,baixoD.map(d=>d.nome.split(' ')[0]).join(', ')||'estoque ok')}
+    ${kpi('Defensivos p/ comprar',baixoD.length,esc(baixoD.map(d=>String(d.nome||'').split(' ')[0]).join(', '))||'estoque ok')}
     ${kpi('Receitas de calda',db.receitas.length,'cadastradas')}
   </div>
   <div class="row2">
@@ -1257,7 +1308,7 @@ function pgPvgest(){
     <div class="panel"><h3>Nova ordem de aplicação</h3>
       <form class="f" id="f-pos">
         <label>Data<input type="date" name="data" value="${hoje}" required></label>
-        <label>Talhão<select name="talhaoId">${db.talhoes.map(t=>`<option value="${t.id}">${esc(t.nome)} (${t.cultura==='cafe'?'café':t.cultura})</option>`).join('')}</select></label>
+        <label>Talhão<select name="talhaoId">${db.talhoes.map(t=>`<option value="${t.id}">${esc(t.nome)} (${t.cultura==='cafe'?'café':esc(t.cultura)})</option>`).join('')}</select></label>
         <label>Receita<select name="receitaId">${db.receitas.map(r=>`<option value="${r.id}">${esc(r.nome)}</option>`).join('')}</select></label>
         <label>Via<select name="via"><option>Foliar</option><option>Via solo (drench)</option><option>Tronco</option></select></label>
         <label>Área (ha)<input type="number" step="0.1" name="area" required style="width:85px"></label>
@@ -1265,14 +1316,15 @@ function pgPvgest(){
         <button class="btn">Abrir ordem</button>
       </form>
       <div id="pulv-msg" style="margin-top:8px"></div>
-      <p class="note">Ao <b>concluir</b> uma ordem, o Gefaz360 valida e baixa o estoque de defensivos (dose × área) e lança o custo no Financeiro, no centro de custo da cultura do talhão.</p></div>
+      <p class="note">Ao <b>concluir</b> uma ordem, informe o dia em que a calda foi aplicada: a <b>carência conta a partir dele</b>, não da data planejada. O Gefaz360 valida e baixa o estoque de defensivos (dose × área) e lança o custo no Financeiro, no centro de custo da cultura do talhão.</p></div>
   </div>
   <div class="tblwrap"><table><thead><tr><th>Data</th><th>Talhão</th><th>Receita</th><th>Via</th><th class="num">Área</th><th class="num">Calda (L)</th><th class="num">Custo est.</th><th>Status</th><th></th></tr></thead><tbody>
-    ${db.pulvOS.slice().sort((a,b)=>a.data<b.data?1:-1).map(o=>{const r=db.receitas.find(x=>x.id===o.receitaId)||{nome:'—',volumeHa:0};
-      return `<tr><td>${dBRy(o.data)}</td><td>${esc(tal(o.talhaoId).nome)}</td><td>${esc(r.nome)}${o.obs?` <span class="sub">· ${esc(o.obs)}</span>`:''}</td>
+    ${db.pulvOS.slice().sort((a,b)=>dataAplicacao(a)<dataAplicacao(b)?1:-1).map(o=>{const r=db.receitas.find(x=>x.id===o.receitaId)||{nome:'—',volumeHa:0};
+      const aplicada=dataAplicacao(o);
+      return `<tr><td>${dBRy(aplicada)}${aplicada!==o.data?`<div class="linked-record">planejada ${dBRy(o.data)}</div>`:''}</td><td>${esc(tal(o.talhaoId).nome)}</td><td>${esc(r.nome)}${o.obs?` <span class="sub">· ${esc(o.obs)}</span>`:''}</td>
       <td>${(o.via||'Foliar')==='Foliar'?'Foliar':`<span class="pill warn">${esc(o.via)}</span>`}</td>
       <td class="num">${N(o.area,1)} ha</td><td class="num">${N(r.volumeHa*o.area)}</td><td class="num">${BRL(osCusto(o))}</td>
-      <td>${o.status==='concluida'?'<span class="pill good">concluída</span>':`<button class="btn mini" data-action="concluir-pos" data-id="${o.id}">Concluir aplicação</button>`}</td>
+      <td>${o.status==='concluida'?'<span class="pill good">concluída</span>':`<div class="os-actions"><input type="date" data-aplicacao value="${hoje}" max="${hoje}" aria-label="Dia em que a calda foi aplicada" title="Dia em que a calda foi aplicada" style="width:150px"><button class="btn mini" data-action="concluir-pos" data-id="${o.id}">Concluir aplicação</button></div>`}</td>
       <td><button class="x" data-action="del" data-col="pulvOS" data-id="${o.id}" title="Excluir">✕</button></td></tr>`;}).join('')}
   </tbody></table></div>
   <h2>Regulagens de aplicação</h2>
@@ -1331,14 +1383,14 @@ function pgPvgest(){
       <label>Preço R$/un<input type="number" step="0.01" name="preco" value="0" style="width:90px"></label>
       <label>Qtd<input type="number" step="0.1" name="qtd" value="0" style="width:75px"></label>
       <label>Mínimo<input type="number" step="0.1" name="min" value="0" style="width:75px"></label>
-      <label>Carência (dias)<input type="number" step="1" name="carencia" value="0" style="width:105px"></label>
+      <label>Carência (dias)<input type="number" step="1" name="carencia" placeholder="da bula" style="width:105px"></label>
       <label>Reentrada (h)<input type="number" step="1" name="reentrada" value="0" style="width:100px"></label>
       <button class="btn">Cadastrar</button>
     </form></div>
   <div class="tblwrap"><table><thead><tr><th>Produto</th><th>Classe</th><th class="num">Qtd</th><th class="num">Mín.</th><th class="num">R$/un</th><th class="num">Carência</th><th class="num">Reentrada</th><th>Situação</th><th>Movimentar</th><th></th></tr></thead><tbody>
     ${db.defensivos.map(d=>`<tr><td>${esc(d.nome)}</td><td>${esc(d.classe)}</td>
       <td class="num">${N(d.qtd,1)} ${esc(d.unidade)}</td><td class="num">${N(d.min,1)}</td><td class="num">${N(d.preco,2)}</td>
-      <td class="num">${d.carencia?N(d.carencia)+' d':'—'}</td><td class="num">${d.reentrada?N(d.reentrada)+' h':'—'}</td>
+      <td class="num">${carenciaNaoInformada(d)?'<span class="pill warn" data-tip="Informe a carência da bula: sem ela, a aplicação não bloqueia a colheita do talhão">não informada</span>':N(d.carencia)+' d'}</td><td class="num">${d.reentrada?N(d.reentrada)+' h':'—'}</td>
       <td>${d.qtd<d.min?'<span class="pill crit">comprar</span>':'<span class="pill good">ok</span>'}</td>
       <td><button class="btn mini ghost" data-action="mov-def" data-id="${d.id}" data-d="-1">− saída</button>
           <button class="btn mini ghost" data-action="mov-def" data-id="${d.id}" data-d="1">+ entrada</button></td>
@@ -1534,8 +1586,8 @@ function pgPos(){
   return `<h1>Café · Pós-colheita</h1>
   <p class="sub">Lotes no terreiro (identificação e observações) e secador com curva de perda de umidade por hora — a base dos indicadores de melhoria do processo.</p>
   <div class="cards">
-    ${kpi('Lotes no terreiro',terreiro.length,terreiro.map(l=>l.codigo).join(', ')||'nenhum')}
-    ${kpi('No secador',secando.length,secando.map(l=>l.codigo).join(', ')||'nenhum')}
+    ${kpi('Lotes no terreiro',terreiro.length,esc(terreiro.map(l=>l.codigo).join(', '))||'nenhum')}
+    ${kpi('No secador',secando.length,esc(secando.map(l=>l.codigo).join(', '))||'nenhum')}
     ${kpi('Perda de umidade média',concl.length?N(taxaMedia,2)+' %/h':'—','secagens concluídas')}
     ${kpi('Tempo médio de secagem',concl.length?N(tempoMedio,0)+' h':'—','entrada → ponto de tulha')}
     ${(()=>{const ben=db.lotes.reduce((a,l)=>a+(l.sacas||0),0);const vnd=db.vendasCafe.reduce((a,v)=>a+v.sacas,0);
@@ -1567,7 +1619,7 @@ function pgPos(){
       <td>${l.cobTipo?'Tipo '+N(l.cobTipo,1)+(l.cobBebida?' · '+esc(l.cobBebida):''):(l.cobBebida?esc(l.cobBebida):'—')}</td>
       <td>${l.peneira?esc(l.peneira)+(l.peneiraPct?' · '+N(l.peneiraPct,0)+'%':''):'—'}</td>
       <td class="num" ${l.sens?`data-tip="Aroma ${N(l.sens.aroma,2)} · Sabor ${N(l.sens.sabor,2)} · Acidez ${N(l.sens.acidez,2)} · Corpo ${N(l.sens.corpo,2)} · Final. ${N(l.sens.fin,2)}${l.descritores?' — '+esc(l.descritores):''}"`:''}>${l.scaa?`<span class="pill ${l.scaa>=80?'good':l.scaa>=70?'warn':'crit'}">${N(l.scaa,1)}</span>`:'—'}</td>
-      <td><span class="pill ${l.status==='seco'||l.status==='beneficiado'?'good':l.status==='secando'?'warn':'crit'}">${l.status==='terreiro'?'no terreiro':l.status}</span></td>
+      <td><span class="pill ${l.status==='seco'||l.status==='beneficiado'?'good':l.status==='secando'?'warn':'crit'}">${l.status==='terreiro'?'no terreiro':esc(l.status)}</span></td>
       <td style="white-space:normal">${esc(l.obs)||'—'}</td>
       <td><button class="x" data-action="del" data-col="lotes" data-id="${l.id}" title="Excluir">✕</button></td></tr>`).join('')}
   </tbody></table></div>
@@ -1701,7 +1753,7 @@ const podouPesado=(talhaoId,safra)=>db.podas.some(p=>p.talhaoId===talhaoId
 function comparaBienal(talhaoId){
   const ss=safrasCafe().filter(s=>prodSafra(talhaoId,s).litros>0);
   const porCarga={alta:[],baixa:[]};
-  ss.forEach(s=>{const c=cargaBienal(talhaoId,s);if(c)porCarga[c.carga].push(s);});
+  ss.forEach(s=>{const c=cargaBienal(talhaoId,s);if(c&&porCarga[c.carga])porCarga[c.carga].push(s);});
   const out={};
   ['alta','baixa'].forEach(k=>{
     const l=porCarga[k];
@@ -1752,7 +1804,7 @@ function pgIntel(){
     const tc=db.talhoes.filter(t=>t.cultura==='cafe');
     const ss=safrasCafe();
     const sAtual=anoFiltro||safraDe(hoje),sProx=safraSeguinte(sAtual);
-    const pillC=c=>`<span class="pill ${c.carga==='alta'?'good':'warn'}"${c.origem==='sugerida'?' data-tip="Sugerida pelo histórico — marque para confirmar"':''}>${c.carga}${c.origem==='sugerida'?'?':''}</span>`;
+    const pillC=c=>`<span class="pill ${c.carga==='alta'?'good':'warn'}"${c.origem==='sugerida'?' data-tip="Sugerida pelo histórico — marque para confirmar"':''}>${esc(c.carga)}${c.origem==='sugerida'?'?':''}</span>`;
     const opcS=[...new Set([...ss,sAtual,sProx])].sort().reverse();
     /* projeção: a próxima safra tende a ser o oposto da atual, no patamar da última safra igual */
     const proj=tc.map(t=>{
@@ -1868,7 +1920,7 @@ function pgCobertura(){
   <p class="sub">Plantio e manejo de cobertura para os cereais — palhada, ciclagem e proteção do solo entre safras.</p>
   <div class="cards">
     ${kpi('Área com cobertura',N(areaC)+' ha',plantios.length+' plantios registrados')}
-    ${kpi('Espécies em uso',especies.length,especies.join(', ')||'—')}
+    ${kpi('Espécies em uso',especies.length,esc(especies.join(', '))||'—')}
     ${kpi('Registros',cobF.length,'plantio, dessecação e manejo')}
   </div>
   <div class="panel"><h3>Novo registro</h3>
@@ -2030,14 +2082,15 @@ function parseGeoJSON(obj){
   const out=[];
   feats.forEach(f=>{
     const g=f.geometry;if(!g)return;
-    const nome=(f.properties&&(f.properties.nome||f.properties.name))||'';
+    const nome=String((f.properties&&(f.properties.nome||f.properties.name))||'');
+    const par=c=>[Number(c?.[0]),Number(c?.[1])];
     if(g.type==='Polygon'){
       const ring=(g.coordinates||[])[0]||[];
-      if(ring.length>=3)out.push({tipo:'poligono',nome,coords:ring.map(c=>[c[0],c[1]])});
+      if(ring.length>=3)out.push({tipo:'poligono',nome,coords:ring.map(par)});
     }else if(g.type==='MultiPolygon'){
       (g.coordinates||[]).forEach((poly,i)=>{
         const ring=(poly||[])[0]||[];
-        if(ring.length>=3)out.push({tipo:'poligono',nome:nome+(g.coordinates.length>1?' '+(i+1):''),coords:ring.map(c=>[c[0],c[1]])});
+        if(ring.length>=3)out.push({tipo:'poligono',nome:nome+(g.coordinates.length>1?' '+(i+1):''),coords:ring.map(par)});
       });
     }else if(g.type==='Point'&&g.coordinates){
       out.push({tipo:'ponto',nome,coords:[[g.coordinates[0],g.coordinates[1]]]});
@@ -2101,6 +2154,10 @@ async function lerArquivoMapa(file){
     if(!polys.length)throw new Error('Nenhum polígono de talhão encontrado no arquivo');
     if(polys.length>5000||polys.reduce((s,p)=>s+(p.coords?.length||0),0)>500000)
       throw new Error('O mapa excede o limite de 5.000 polígonos ou 500.000 coordenadas');
+    /* mesma regra da validação do banco: um GeoJSON em UTM (metros) entraria aqui e depois travaria o
+       Desfazer e a importação do backup */
+    if(polys.some(p=>p.coords.some(c=>!(Number.isFinite(c[0])&&Number.isFinite(c[1])&&Math.abs(c[0])<=180&&Math.abs(c[1])<=90))))
+      throw new Error('O arquivo tem coordenadas fora de longitude/latitude (±180/±90) — exporte o mapa em WGS 84 (EPSG:4326)');
     mapaPreview=polys.map(f=>{
       const areaHa=areaHectares(f.coords);
       const match=db.talhoes.find(t=>t.nome.toLowerCase()===f.nome.toLowerCase())
@@ -2113,16 +2170,16 @@ async function lerArquivoMapa(file){
 }
 function exportarKML(){
   const placemarks=db.geoTalhoes.map(g=>{
-    const t=tal(g.talhaoId),coordsStr=g.coords.map(c=>c[0]+','+c[1]+',0').join(' ');
+    const t=tal(g.talhaoId),coordsStr=g.coords.map(c=>Number(c[0])+','+Number(c[1])+',0').join(' ');
     return `<Placemark><name>${esc(g.nome||t.nome)}</name><ExtendedData>
       <Data name="cultura"><value>${esc(NOMES_CULT[g.cultura]||g.cultura||'')}</value></Data>
       <Data name="area_ha"><value>${N(g.areaHa,2)}</value></Data></ExtendedData>
       <Polygon><outerBoundaryIs><LinearRing><coordinates>${coordsStr}</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>`;
   }).join('');
   const pontos=db.mip.filter(hasCoords).map(m=>
-    `<Placemark><name>${esc(m.tipo)} (nível ${m.nivel})</name><ExtendedData>
-      <Data name="data"><value>${m.data}</value></Data><Data name="obs"><value>${esc(m.obs||'')}</value></Data></ExtendedData>
-      <Point><coordinates>${m.lon},${m.lat},0</coordinates></Point></Placemark>`).join('');
+    `<Placemark><name>${esc(m.tipo)} (nível ${esc(m.nivel)})</name><ExtendedData>
+      <Data name="data"><value>${esc(m.data)}</value></Data><Data name="obs"><value>${esc(m.obs||'')}</value></Data></ExtendedData>
+      <Point><coordinates>${Number(m.lon)},${Number(m.lat)},0</coordinates></Point></Placemark>`).join('');
   const kml=`<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Gefaz360</name>${placemarks}${pontos}</Document></kml>`;
   /* downloadBlob revoga a URL com atraso; revogar logo após o click cancela o download no Firefox/Safari */
   downloadBlob(new Blob([kml],{type:'application/vnd.google-earth.kml+xml'}),'gefaz360-talhoes.kml');
@@ -2146,12 +2203,12 @@ function mapaSVG(modo){
   const polys=gts.map(g=>{
     const pts=g.coords.map(c=>cx(c[0])+','+cy(c[1])).join(' ');
     const t=tal(g.talhaoId),car=g.talhaoId?statusCarencia(g.talhaoId):null,cor=corDe(g);
-    const tip=`${esc(g.nome||t.nome)} — ${N(g.areaHa,1)} ha${g.talhaoId?' · '+(NOMES_CULT[t.cultura]||t.cultura):' · não vinculado'}${car?' · ⚠️ em carência':''}`;
+    const tip=`${esc(g.nome||t.nome)} — ${N(g.areaHa,1)} ha${g.talhaoId?' · '+esc(NOMES_CULT[t.cultura]||t.cultura):' · não vinculado'}${car?' · ⚠️ em carência':''}`;
     return `<polygon points="${pts}" fill="${cor}" fill-opacity="0.45" stroke="${cor}" stroke-width="1.5" data-tip="${tip}" aria-label="${tip}" ${g.talhaoId?'tabindex="0" role="button" style="cursor:pointer"':'role="img"'} data-action="ficha-talhao-mapa" data-id="${g.talhaoId}"/>`;
   }).join('');
   const pontos=db.mip.filter(hasCoords).map(m=>{
     const cor=m.nivel>=3?'var(--crit)':m.nivel==2?'var(--warn)':'var(--good)';
-    return `<circle cx="${cx(m.lon)}" cy="${cy(m.lat)}" r="6" fill="${cor}" stroke="var(--page)" stroke-width="1.5" data-tip="${esc(m.tipo)} · nível ${m.nivel} — ${dBRy(m.data)}${m.obs?' · '+esc(m.obs):''}"/>`;
+    return `<circle cx="${cx(m.lon)}" cy="${cy(m.lat)}" r="6" fill="${cor}" stroke="var(--page)" stroke-width="1.5" data-tip="${esc(m.tipo)} · nível ${esc(m.nivel)} — ${dBRy(m.data)}${m.obs?' · '+esc(m.obs):''}"/>`;
   }).join('');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;background:var(--accent-soft);border-radius:10px" role="img" aria-label="Mapa esquemático dos talhões e ocorrências MIP">`+
     `<title>Mapa dos talhões</title><desc>Polígonos dos talhões cadastrados e pontos de monitoramento integrado de pragas. Use a tabela da página para consultar os mesmos dados em texto.</desc>`+
@@ -2227,10 +2284,11 @@ function pgTalhao(){
   const ev=[];
   F(db.solos).filter(s=>s.talhaoId===t.id).forEach(s=>ev.push({d:s.data,cl:'warn',lb:'análise de solo',
     tx:`pH ${N(s.ph,1)} · M.O. ${N(s.mo,1)}% · V% ${N(s.v)}${s.ctc?' · CTC '+N(s.ctc,1):''}${s.obs?' — '+esc(s.obs):''}`}));
-  F(db.adubacoes).filter(a=>a.talhaoId===t.id).forEach(a=>ev.push({d:a.data,cl:'good',lb:a.operacao.toLowerCase(),
+  /* lb é texto puro (escapado na linha do tempo); tx já sai montado em HTML */
+  F(db.adubacoes).filter(a=>a.talhaoId===t.id).forEach(a=>ev.push({d:a.data,cl:'good',lb:String(a.operacao||'adubação').toLowerCase(),
     tx:`${esc(a.produto)} — ${N(a.dose,1)} ${esc(a.unidade)} em ${N(a.area,1)} ha`}));
-  F(db.pulvOS).filter(o=>o.talhaoId===t.id).forEach(o=>{const r=db.receitas.find(x=>x.id===o.receitaId)||{nome:'—'};
-    ev.push({d:o.data,cl:o.status==='concluida'?'good':'warn',lb:'pulverização',
+  pulvDaSafra().filter(o=>o.talhaoId===t.id).forEach(o=>{const r=db.receitas.find(x=>x.id===o.receitaId)||{nome:'—'};
+    ev.push({d:dataAplicacao(o),cl:o.status==='concluida'?'good':'warn',lb:'pulverização',
       tx:`${esc(r.nome)}${o.via&&o.via!=='Foliar'?' · '+esc(o.via):''} — ${N(o.area,1)} ha (${o.status==='concluida'?'aplicada':'ordem aberta'})`});});
   if(t.cultura==='cafe')F(db.cafe).filter(r=>r.talhaoId===t.id).forEach(r=>ev.push({d:r.data,cl:'good',lb:'colheita',
     tx:`${esc(r.tipo)} — ${N(r.litros/p.litrosPorCarreta,1)} carretas (${N(r.litros)} L)${r.horas?' · '+N(r.horas,1)+' h':''}`}));
@@ -2244,20 +2302,20 @@ function pgTalhao(){
     cl:pd.tipo==='Recepa'||pd.tipo==='Esqueletamento'?'crit':'warn',lb:'poda',
     tx:`${esc(pd.tipo)} — ${N(pd.area,1)} ha${pd.obs?' · '+esc(pd.obs):''}`}));
   F(db.arruacoes).filter(ar=>ar.talhaoId===t.id).forEach(ar=>ev.push({d:ar.data,
-    cl:ar.tipo==='Arruação'?'warn':'good',lb:ar.tipo.toLowerCase(),
+    cl:ar.tipo==='Arruação'?'warn':'good',lb:String(ar.tipo||'arruação').toLowerCase(),
     tx:`${N(ar.area,1)} ha${ar.obs?' · '+esc(ar.obs):''}`}));
   F(db.capinas).filter(cp=>cp.talhaoId===t.id).forEach(cp=>ev.push({d:cp.data,
-    cl:cp.tipo.startsWith('Capina química')?'warn':'good',lb:'capina/roçada',
+    cl:String(cp.tipo||'').startsWith('Capina química')?'warn':'good',lb:'capina/roçada',
     tx:`${esc(cp.tipo)} — ${N(cp.area,1)} ha${cp.obs?' · '+esc(cp.obs):''}`}));
   F(db.os).filter(o=>o.talhaoId===t.id).forEach(o=>ev.push({
     d:String(o.concluidoEm||o.iniciadoEm||o.data||hoje).slice(0,10),
     cl:o.status==='concluida'?'good':osAtrasada(o)?'crit':'warn',
-    lb:`OS ${esc(o.codigo)||'operacional'}`,
+    lb:`OS ${o.codigo||'operacional'}`,
     tx:`${esc(o.titulo)} · ${esc(OS_STATUS_INFO[o.status]?.label||o.status)} · ${N(o.progresso)}%${o.responsavelId?' · '+esc(osResponsavel(o)):''}`}));
   F(db.documentos).filter(dc=>dc.talhaoId===t.id).forEach(dc=>ev.push({d:dc.data,cl:'good',lb:'documento',
     tx:`${dc.mime==='application/pdf'?'📄':'📷'} ${esc(dc.nome)} — ${esc(dc.categoria)}${dc.desc?' · '+esc(dc.desc):''}`}));
   F(db.lotes).filter(l=>l.talhaoId===t.id).forEach(l=>ev.push({d:l.data,cl:'warn',lb:'lote de café',
-    tx:`${esc(l.codigo)} — ${esc(l.origem)}${l.chuva?' · tomou chuva':''}${l.scaa?' · SCAA '+N(l.scaa,1):''} (${l.status})`}));
+    tx:`${esc(l.codigo)} — ${esc(l.origem)}${l.chuva?' · tomou chuva':''}${l.scaa?' · SCAA '+N(l.scaa,1):''} (${esc(l.status)})`}));
   ev.sort((a,b)=>a.d<b.d?1:-1);
   const ua=db.solos.filter(s=>s.talhaoId===t.id).sort((a,b)=>a.data<b.data?1:-1)[0];
   let prod='—';
@@ -2272,22 +2330,22 @@ function pgTalhao(){
     <p style="margin:0;font-size:14px">Aplicação de <b>${esc(car.receita)}</b> em ${dBRy(car.data)}${car.prod?` (${esc(car.prod)}, carência de ${N(car.dias)} dias)`:''}.
     <b>Não colher antes de ${dBRy(car.libera||car.liberaRe)}</b>${car.libera?` — faltam ${N(diasEntre(hoje,car.libera))} dias`:''}.${car.horas?` Reentrada no talhão liberada após ${N(car.horas)} h da aplicação.`:''}</p></div>`:''}
   <div class="panel"><form class="f" data-passive-form>
-    <label>Talhão<select id="selTalhao">${ts.map(x=>`<option value="${x.id}" ${x.id===talhaoSel?'selected':''}>${esc(x.nome)} (${NOMES_CULT[x.cultura]||x.cultura})</option>`).join('')}</select></label>
+    <label>Talhão<select id="selTalhao">${ts.map(x=>`<option value="${x.id}" ${x.id===talhaoSel?'selected':''}>${esc(x.nome)} (${esc(NOMES_CULT[x.cultura]||x.cultura)})</option>`).join('')}</select></label>
     <button class="btn" data-action="caderno" data-id="${t.id}" type="button">🖨️ Gerar caderno de campo</button>
   </form>
   <p class="note">O caderno de campo reúne todas as operações do talhão no período selecionado — o documento que certificadoras (Rainforest, 4C, Certifica Minas) e compradores de especiais pedem na auditoria.</p></div>
   <div class="cards">
-    ${kpi(esc(t.nome),N(t.area,1)+' ha',(NOMES_CULT[t.cultura]||t.cultura)+(t.variedade?' · '+esc(t.variedade):''))}
+    ${kpi(esc(t.nome),N(t.area,1)+' ha',esc(NOMES_CULT[t.cultura]||t.cultura)+(t.variedade?' · '+esc(t.variedade):''))}
     ${kpi('Produtividade',prod,anoFiltro?'safra '+anoFiltro:'todas as safras')}
     ${t.cultura==='cafe'?(()=>{const cb=cargaBienal(t.id,anoFiltro||safraDe(hoje));
-      return kpi('Carga bienal',cb?cb.carga+(cb.origem==='sugerida'?' ?':''):'—',
+      return kpi('Carga bienal',cb?esc(cb.carga)+(cb.origem==='sugerida'?' ?':''):'—',
         cb?(cb.origem==='sugerida'?'deduzida do histórico — confirme em Café · Inteligência':'marcada'+(cb.obs?' · '+esc(cb.obs):''))
           :'marque em Café · Inteligência');})():''}
     ${kpi('Última análise de solo',ua?dBRy(ua.data):'—',ua?'V% '+N(ua.v)+' · pH '+N(ua.ph,1)+(ua.argila?' · argila '+N(ua.argila)+'%':''):'sem análise registrada')}
     ${kpi('Eventos',ev.length,anoFiltro?'na safra '+anoFiltro:'no histórico completo')}
   </div>
   <div class="panel"><h3>Linha do tempo</h3>
-    ${ev.slice(0,150).map(e=>`<div class="alert"><span style="color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 62px">${dBRy(e.d)}</span> <span class="pill ${e.cl}">${e.lb}</span> <span>${e.tx}</span></div>`).join('')||'<p class="sub">Nenhum evento registrado para este talhão'+(anoFiltro?' na safra '+anoFiltro:'')+'.</p>'}
+    ${ev.slice(0,150).map(e=>`<div class="alert"><span style="color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 62px">${dBRy(e.d)}</span> <span class="pill ${e.cl}">${esc(e.lb)}</span> <span>${e.tx}</span></div>`).join('')||'<p class="sub">Nenhum evento registrado para este talhão'+(anoFiltro?' na safra '+anoFiltro:'')+'.</p>'}
   </div>`;
 }
 
@@ -2420,7 +2478,7 @@ function pgDocs(){
   <div class="cards">
     ${kpi('Documentos',db.documentos.length,docs.length!==db.documentos.length?docs.length+' na safra filtrada':'no acervo')}
     ${kpi('Espaço usado',fmtKB(totalB),'armazenados neste navegador')}
-    ${kpi('Categorias',[...new Set(db.documentos.map(d=>d.categoria))].length,[...new Set(db.documentos.map(d=>d.categoria))].slice(0,3).join(', ')||'—')}
+    ${kpi('Categorias',[...new Set(db.documentos.map(d=>d.categoria))].length,esc([...new Set(db.documentos.map(d=>d.categoria))].slice(0,3).join(', '))||'—')}
   </div>
   <div class="panel"><h3>Enviar documento (foto ou PDF)</h3>
     <form class="f" id="f-doc">
@@ -2534,11 +2592,11 @@ function cadernoCampo(talhaoId){
     `pH ${N(s.ph,1)} · M.O. ${N(s.mo,1)}% · P ${N(s.p,1)} · K ${N(s.k)} · V% ${N(s.v)}${s.obs?' — '+s.obs:''}`));
   F(db.adubacoes).filter(a=>a.talhaoId===t.id).forEach(a=>push(a.data,a.operacao,
     `${a.produto} — ${N(a.dose,1)} ${a.unidade} em ${N(a.area,1)} ha${a.obs?' — '+a.obs:''}`));
-  F(db.pulvOS).filter(o=>o.talhaoId===t.id&&o.status==='concluida').forEach(o=>{
+  pulvDaSafra().filter(o=>o.talhaoId===t.id&&o.status==='concluida').forEach(o=>{
     const r=db.receitas.find(x=>x.id===o.receitaId)||{nome:'—',itens:[]};
     const prods=(r.itens||[]).map(i=>{const p=db.defensivos.find(d=>d.id===i.prodId);
       return p?`${p.nome} ${N(i.dose,2)} ${p.unidade}/ha`:'';}).filter(x=>x).join('; ');
-    push(o.data,'Aplicação — '+(o.via||'Foliar'),`${r.nome} (alvo: ${r.alvo||'—'}) — ${N(o.area,1)} ha · ${prods}`);});
+    push(dataAplicacao(o),'Aplicação — '+(o.via||'Foliar'),`${r.nome} (alvo: ${r.alvo||'—'}) — ${N(o.area,1)} ha · ${prods}`);});
   F(db.podas).filter(x=>x.talhaoId===t.id).forEach(x=>push(x.data,'Poda',`${x.tipo} — ${N(x.area,1)} ha${x.obs?' — '+x.obs:''}`));
   F(db.arruacoes).filter(x=>x.talhaoId===t.id).forEach(x=>push(x.data,x.tipo,`${N(x.area,1)} ha${x.obs?' — '+x.obs:''}`));
   F(db.capinas).filter(x=>x.talhaoId===t.id).forEach(x=>push(x.data,'Capina/roçada',`${x.tipo} — ${N(x.area,1)} ha${x.obs?' — '+x.obs:''}`));
@@ -2553,7 +2611,7 @@ function cadernoCampo(talhaoId){
   lin.sort((a,b)=>a.d<b.d?1:-1);
   const lotes=F(db.lotes).filter(l=>l.talhaoId===t.id);
   imprimir(`<h1>Caderno de campo — ${esc(t.nome)}</h1>
-  <p class="sub">${NOMES_CULT[t.cultura]||t.cultura}${t.variedade?' · '+esc(t.variedade):''} · ${N(t.area,1)} ha · Safra: ${esc(ano)} · Emitido em ${dBRy(hoje)}</p>
+  <p class="sub">${esc(NOMES_CULT[t.cultura]||t.cultura)}${t.variedade?' · '+esc(t.variedade):''} · ${N(t.area,1)} ha · Safra: ${esc(ano)} · Emitido em ${dBRy(hoje)}</p>
   <h2>Registro de operações (${lin.length})</h2>
   <table><thead><tr><th>Data</th><th>Operação</th><th>Detalhamento</th></tr></thead><tbody>
     ${lin.map(x=>`<tr><td>${dBRy(x.d)}</td><td>${esc(x.op)}</td><td>${esc(x.det)}</td></tr>`).join('')
@@ -2584,6 +2642,8 @@ const EDIT_FORM={cafe:'f-cafe',cargas:'f-carga',fin:'f-fin',func:'f-func',apont:
   coberturas:'f-cob',combCompras:'f-comb-compra',abastecimentos:'f-abast',
   lembretes:'f-lembrete',chuvas:'f-chuva',solos:'f-solo',adubacoes:'f-adub',podas:'f-poda',arruacoes:'f-arr',capinas:'f-cap'};
 const FORM_COL=Object.fromEntries(Object.entries(EDIT_FORM).map(([c,fo])=>[fo,c]));
+/* coleção gravada por cada formulário, inclusive os sem edição — para validar referências obrigatórias */
+const FORM_REFS={...FORM_COL,'f-pos':'pulvOS','f-bienal':'bienal','f-mip':'mip','f-vcafe':'vendasCafe','f-os-operacional':'os'};
 /* campos de fluxo que a edição não deve resetar */
 const STRIP_EDIT={'f-med':['acertada','consolidada'],'f-lote':['status','sacas'],
   'f-lembrete':['feito'],'f-carga':['pago'],'f-item':['resp'],
@@ -2676,6 +2736,16 @@ function validateForm(f){
       if(el.max!==''&&n>Number(el.max))add(el.name,`${label} deve ser no máximo ${N(Number(el.max),Number(el.step)<1?1:0)}.`);
     }
   });
+  /* referência obrigatória precisa apontar para um registro existente — o mesmo critério da validação
+     estrita (REFS); sem isto, um select vazio gravava um registro que travava o Desfazer e o backup */
+  REFS.forEach(([collection,field,target,optional])=>{
+    const el=f.elements[field];if(optional||FORM_REFS[f.id]!==collection||!el)return;
+    const value=val(f,field);
+    if(!value)add(field,`${fieldLabel(el)} é obrigatório.`);
+    else if(!db[target].some(x=>x.id===value))add(field,`${fieldLabel(el)}: o registro escolhido não existe mais. Recarregue a página.`);
+  });
+  if(f.id==='f-mip'&&!val(f,'lat')!==!val(f,'lon'))
+    add(val(f,'lat')?'lon':'lat','Informe latitude e longitude juntas, ou deixe as duas em branco.');
   if(f.id==='f-carga'){
     const c={bruto:num(f,'bruto'),tara:num(f,'tara'),umidade:num(f,'umidade'),preco:num(f,'preco')};
     cargaErrors(c).forEach(message=>add(message.includes('tara')?'tara':message.includes('umidade')?'umidade':message.includes('preço')?'preco':'bruto',message));
@@ -2796,7 +2866,9 @@ function render(){
       (d.produtos||[]).forEach(p=>{
         const nid=uid();idMap[p.id]=nid;
         db.defensivos.push({id:nid,nome:p.nome||'Produto',classe:p.classe||'—',unidade:p.unidade||'L',
-          preco:+p.preco||0,qtd:+p.estoque_atual||0,min:+p.estoque_min||0});
+          preco:+p.preco||0,qtd:+p.estoque_atual||0,min:+p.estoque_min||0,
+          /* o PVgest não guarda carência: fica "não informada", nunca zero */
+          carencia:null,reentrada:null});
       });
       (d.receitas||[]).forEach(r=>{
         db.receitas.push({id:uid(),nome:r.nome||'Receita',cultura:r.cultura||'',alvo:r.alvo||'',
@@ -2985,7 +3057,7 @@ $main.addEventListener('submit',async e=>{
   else if(f.id==='f-med')db.medicoes.push({id:uid(),data:val(f,'data'),talhaoId:val(f,'talhaoId'),funcId:val(f,'funcId'),
     tipo:val(f,'tipo'),medidas:num(f,'medidas'),valorMedida:num(f,'valorMedida'),acertada:false,consolidada:false});
   else if(f.id==='f-def')db.defensivos.push({id:uid(),nome:val(f,'nome'),classe:val(f,'classe'),unidade:val(f,'unidade'),
-    preco:num(f,'preco'),qtd:num(f,'qtd'),min:num(f,'min'),carencia:num(f,'carencia'),reentrada:num(f,'reentrada')});
+    preco:num(f,'preco'),qtd:num(f,'qtd'),min:num(f,'min'),carencia:val(f,'carencia')===''?null:num(f,'carencia'),reentrada:num(f,'reentrada')});
   else if(f.id==='f-rec'){
     db.receitas.push({id:uid(),nome:val(f,'nome'),cultura:val(f,'cultura'),alvo:val(f,'alvo'),
       volumeHa:num(f,'volumeHa'),itens:recItens});
@@ -3154,7 +3226,14 @@ $main.addEventListener('click',async e=>{
       [...fEd.elements].forEach(el=>{
         if(!el.name)return;
         if(el.type==='checkbox'){el.checked=!!rec[el.name];return;}
-        const v=rec[el.name];if(v===undefined||v===null)return;
+        /* campo vazio no registro volta ao padrão do formulário — senão herdaria o valor do registro editado
+           antes (ex.: a carência de outro produto) */
+        const v=rec[el.name];
+        if(v===undefined||v===null){
+          if(el.tagName==='SELECT'){const i=[...el.options].findIndex(o=>o.defaultSelected);el.selectedIndex=Math.max(0,i);}
+          else el.value=el.defaultValue;
+          return;
+        }
         /* valor fora da lista (ex.: tipo "Serviço" vindo das Ordens) ganha opção própria, senão viraria "" ao salvar */
         if(el.tagName==='SELECT'&&v!==''&&![...el.options].some(o=>o.value===String(v)))el.add(new Option(String(v),String(v)));
         el.value=v;
@@ -3186,16 +3265,20 @@ $main.addEventListener('click',async e=>{
     const c=db.cargas.find(x=>x.id===id);if(!c)return;
     const calc=cargaCalc(c),verb=c.pago?'reabrir':'marcar como recebida';
     if(!confirm(`Deseja ${verb} a carga NF ${c.nf||'s/nº'} no valor de ${BRL2(calc.valor)}?`))return;
-    await beginUndo('Alteração de pagamento de carga');c.pago=!c.pago;
-    const linked=db.fin.find(fx=>fx.cargaId===c.id);
-    if(linked){const data=linked.data;Object.assign(linked,finCarga(c));linked.data=c.pago?hoje:data;linked.status=c.pago?'realizado':'previsto';}
-    else db.fin.push(Object.assign({id:uid(),data:c.pago?hoje:c.data},finCarga(c),{status:c.pago?'realizado':'previsto'}));
+    await beginUndo('Alteração de pagamento de carga');marcaRecebimentoCarga(c,!c.pago);
     changed=true;statusMessage=c.pago?'Carga recebida e financeiro atualizado.':'Recebimento reaberto como título previsto.';
   }
   else if(a==='baixa'){
     const x=db.fin.find(x2=>x2.id===id);if(!x||x.status==='realizado')return;
-    if(!confirm(`Dar baixa em “${recordName(x)}” no valor de ${BRL2(x.valor)}?`))return;
-    await beginUndo('Baixa financeira');x.status='realizado';changed=true;statusMessage='Baixa financeira concluída.';
+    /* título de carga: a baixa é o recebimento da carga, feito pela origem para os dois ficarem iguais */
+    const carga=x.cargaId?db.cargas.find(c=>c.id===x.cargaId):null;
+    if(x.cargaId&&!carga){showStatus('A carga deste título não existe mais.',{timeout:0});return;}
+    /* o valor gravado é o da carga (peso × preço), o mesmo do botão da carga — é ele que a pergunta mostra */
+    if(!confirm(carga?`Dar baixa em “${recordName(x)}”? A carga NF ${carga.nf||'s/nº'} será marcada como recebida, no valor de ${BRL2(cargaCalc(carga).valor)}.`
+      :`Dar baixa em “${recordName(x)}” no valor de ${BRL2(x.valor)}?`))return;
+    await beginUndo('Baixa financeira');
+    if(carga)marcaRecebimentoCarga(carga,true);else x.status='realizado';
+    changed=true;statusMessage=carga?'Baixa concluída; a carga foi marcada como recebida.':'Baixa financeira concluída.';
   }
   else if(a==='mov'){
     const i=db.estoque.find(x=>x.id===id),delta=Number(b.dataset.d);if(!i||!Number.isFinite(delta)||!delta)return;
@@ -3247,6 +3330,11 @@ $main.addEventListener('click',async e=>{
   }
   else if(a==='concluir-pos'){
     const o=db.pulvOS.find(x=>x.id===id);if(!o||o.status==='concluida')return;
+    /* dia em que a calda foi aplicada (campo ao lado do botão): a carência conta dele, não da data planejada */
+    const campo=b.closest?.('tr')?.querySelector?.('input[data-aplicacao]'),quando=campo?String(campo.value||''):hoje;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(quando)||quando>hoje){
+      showStatus('Informe o dia em que a calda foi aplicada; ele não pode estar no futuro.',{timeout:0});campo?.focus?.();return;
+    }
     const r=db.receitas.find(x=>x.id===o.receitaId),msg=document.getElementById('pulv-msg');
     if(!r){if(msg)msg.innerHTML='<span class="pill crit">Receita da ordem não existe mais.</span>';return;}
     const quantities=new Map();
@@ -3257,14 +3345,18 @@ $main.addEventListener('click',async e=>{
     if(falta.length){
       if(msg)msg.innerHTML='<span class="pill crit">Estoque insuficiente: '+falta.map(x=>x.p?esc(x.p.nome)+' (precisa '+N(x.need,1)+' '+esc(x.p.unidade)+', tem '+N(x.p.qtd,1)+')':'produto excluído').join('; ')+'</span>';return;
     }
-    const custo=custoReceitaHa(r)*o.area;
-    if(!confirm(`Concluir a aplicação em ${N(o.area,1)} ha? Serão baixados os defensivos e lançado o custo de ${BRL2(custo)}.`))return;
+    const custo=custoReceitaHa(r)*o.area,car=carenciaReceita(r),libera=car.dias?addDias(quando,car.dias):'';
+    const semCarencia=[...new Set(required.filter(x=>carenciaNaoInformada(x.p)).map(x=>x.p.nome))];
+    const aviso=(libera?` Carência: não colher antes de ${dBRy(libera)} (${car.prod}, ${N(car.dias)} dias).`:'')+
+      (semCarencia.length?` Atenção: ${semCarencia.join(', ')} sem carência cadastrada — confira a bula antes de colher.`:'');
+    if(!confirm(`Concluir a aplicação de ${dBRy(quando)} em ${N(o.area,1)} ha? Serão baixados os defensivos e lançado o custo de ${BRL2(custo)}.${aviso}`))return;
     await beginUndo('Conclusão de aplicação');
     required.forEach(({p,need})=>{p.qtd-=need;});
     const cult=(tal(o.talhaoId).cultura||'cafe');
-    db.fin.push({id:uid(),data:hoje,tipo:'saida',categoria:'Defensivos',centro:cult==='cafe'?'Cafe':cult[0].toUpperCase()+cult.slice(1),
+    db.fin.push({id:uid(),data:quando,tipo:'saida',categoria:'Defensivos',centro:cult==='cafe'?'Cafe':cult[0].toUpperCase()+cult.slice(1),
       desc:'Aplicação: '+r.nome+' — '+tal(o.talhaoId).nome+' ('+N(o.area,1)+' ha)',valor:custo,status:'realizado',pulvOSId:o.id});
-    o.status='concluida';changed=true;statusMessage='Aplicação concluída; estoque e financeiro atualizados.';
+    o.status='concluida';o.dataAplicacao=quando;changed=true;
+    statusMessage=libera&&libera>hoje?`Aplicação concluída: não colher ${tal(o.talhaoId).nome} antes de ${dBRy(libera)}.`:'Aplicação concluída; estoque e financeiro atualizados.';
   }
   else if(a==='export'){await exportBackupCompleto();return;}
   else if(a==='restore-backup'){
@@ -3370,6 +3462,7 @@ function virouDia(){
   const antigo=atualizaHoje();if(!antigo)return;
   if(!formularioEmUso()){const y=window.scrollY;render();window.scrollTo(0,y);return;}
   $main.querySelectorAll('input[type="date"]').forEach(el=>{
+    if(el.max===antigo)el.max=hoje;   /* ex.: dia da aplicação, que não pode ser futuro */
     if(el.form?.dataset.editId||el.value!==antigo||el.defaultValue!==antigo)return;
     el.defaultValue=hoje;el.value=hoje;
   });

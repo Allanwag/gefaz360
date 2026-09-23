@@ -18,6 +18,16 @@ alertas da visão geral e, quando vinculadas, integram a Oficina e a linha do te
 do talhão. Ordens antigas de manutenção são migradas automaticamente sem perder
 descrição, máquina, peças ou mão de obra.
 
+## Pulverização e carência
+
+Ao concluir uma ordem de aplicação, informe o dia em que a calda foi aplicada. A
+carência (a maior entre os produtos da calda) conta a partir desse dia, e é ele que
+vai para o Financeiro, a Ficha do talhão e o caderno de campo; a data da ordem fica
+como "planejada". Ordens concluídas em versões anteriores usam o dia em que foram
+concluídas no sistema, o que nunca libera o talhão antes da hora. Produto com
+carência em branco (por exemplo, importado do PVgest) aparece como **não
+informada** e é avisado na conclusão: não é tratado como carência zero.
+
 ## Segurança e recuperação
 
 1. Em **Cadastros & Dados**, use **Exportar backup completo**. O JSON inclui
@@ -31,6 +41,9 @@ descrição, máquina, peças ou mão de obra.
 5. O app não envia os registros a um servidor, mas quem tiver acesso ao mesmo
    perfil do navegador poderá lê-los. Para dados reais, proteja o dispositivo e o
    perfil do sistema operacional.
+
+Os formulários aplicam as mesmas regras de vínculo da importação: tudo que a tela
+grava pode ser desfeito, restaurado e reimportado a partir do backup.
 
 Importações validam todos os anexos antes da gravação e usam novos identificadores
 para preservar os arquivos atuais. Documentos excluídos e anexos substituídos
