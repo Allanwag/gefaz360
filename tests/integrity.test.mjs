@@ -403,3 +403,31 @@ test('só reentrada não vira carência no mapa nem na ficha; entre reentradas v
   const fichaCar=a.run('pgTalhao()');
   assert.match(fichaCar,/⚠️ Talhão em carência/);assert.doesNotMatch(fichaCar,/Intervalo de reentrada/);
 });
+test('financeiro mostra títulos em aberto de safras anteriores',()=>{
+  const a=setup();a.run("anoFiltro='2030/31'");
+  const previstos=a.run("db.fin.filter(f=>f.status==='previsto').length");assert.ok(previstos>0);
+  const html=a.run('pgFin()');
+  assert.equal((html.match(/data-action="baixa"/g)||[]).length,previstos);
+  const pagar=a.run("BRL(db.fin.filter(f=>f.status==='previsto'&&f.tipo==='saida').reduce((s,f)=>s+f.valor,0))");
+  assert.ok(html.includes(pagar));
+  const receber=a.run("BRL(db.fin.filter(f=>f.status==='previsto'&&f.tipo==='entrada'&&!f.cargaId).reduce((s,f)=>s+f.valor,0)+db.cargas.filter(c=>!c.pago).reduce((s,c)=>s+cargaCalc(c).valor,0))");
+  assert.ok(html.includes(receber));
+  assert.match(html,/pill warn">safra \d{4}\/\d{2}</);
+});
+test('financeiro sem filtro de safra não repete títulos',()=>{
+  const a=setup();a.run("anoFiltro=''");
+  assert.equal((a.run('pgFin()').match(/<tr>\s*<td>\d{2}\/\d{2}\/\d{2}<\/td>/g)||[]).length,a.run('db.fin.length'));
+});
+test('grãos e painel dizem o que está fora do filtro de safra',()=>{
+  const a=setup();
+  const aberto=a.run("BRL(db.cargas.filter(c=>c.cultura==='milho'&&!c.pago).reduce((s,c)=>s+cargaCalc(c).valor,0))");
+  assert.notEqual(aberto,'R$ 0');
+  a.run("anoFiltro='2030/31'");
+  assert.ok(a.run("pgGrao('milho')").includes('+ '+aberto+' de outras safras'));
+  assert.match(a.run('pgDash()'),/realizado na safra 2030\/31/);
+  assert.match(a.run('pgFin()'),/entradas − saídas na safra 2030\/31/);
+  a.run("anoFiltro=''");
+  assert.doesNotMatch(a.run("pgGrao('milho')"),/de outras safras/);
+  assert.match(a.run('pgDash()'),/realizado · todas as safras/);
+  assert.match(a.run('pgFin()'),/entradas − saídas · todas as safras/);
+});

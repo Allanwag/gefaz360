@@ -734,7 +734,7 @@ function pgDash(){
     ${kpi('Café colhido',N(sacasCafe,0)+' sc',N(litros/p.litrosPorCarreta,1)+' carretas · '+N(sacasCafe/areaCult('cafe'),1)+' sc/ha')}
     ${kpi('Milho entregue',N(mi.sacas,0)+' sc',BRL(mi.valor)+' · '+BRL(mi.aberto)+' a receber')}
     ${kpi('Soja entregue',N(so.sacas,0)+' sc',BRL(so.valor)+' · '+BRL(so.aberto)+' a receber')}
-    ${kpi('Saldo de caixa',BRL(saldo),'realizado no ano')}
+    ${kpi('Saldo de caixa',BRL(saldo),anoFiltro?'realizado na safra '+anoFiltro:'realizado · todas as safras')}
     ${kpi('A pagar até '+dBR(lim30),BRL(prox30),db.fin.filter(f=>f.status==='previsto'&&f.tipo==='saida').length+' títulos previstos')}
     ${kpi('OS operacionais',osAb.length,osAtr.length?osAtr.length+' atrasada(s)':'execução dentro do prazo')}
   </div>
@@ -859,13 +859,15 @@ function pgGrao(cult){
   const tot=somaCargas(cult),area=areaCult(cult);
   const talhoes=db.talhoes.filter(t=>t.cultura===cult);
   const porTal=talhoes.map(t=>({t,sc:rows.filter(c=>c.talhaoId===t.id).reduce((a,c)=>a+cargaCalc(c).sacas,0)}));
+  /* cargas não pagas de outras safras: continuam a receber mesmo com o filtro nesta safra */
+  const foraAberto=anoFiltro?db.cargas.filter(c=>c.cultura===cult&&!c.pago&&safraDe(c.data)!==anoFiltro).reduce((a,c)=>a+cargaCalc(c).valor,0):0;
   return `<h1>Colheita de ${nome.toLowerCase()} — saídas de caminhão</h1>
   <p class="sub">Romaneio por carga: pesagem, desconto de umidade (base 14%), NF-e e situação do pagamento</p>
   <div class="cards">
     ${kpi('Cargas',rows.length,rows.filter(c=>!c.pago).length+' com pagamento pendente')}
     ${kpi('Sacas entregues',N(tot.sacas,0)+' sc',N(tot.sacas/(area||1),1)+' sc/ha · '+N(area)+' ha')}
     ${kpi('Valor bruto',BRL(tot.valor),'preço médio '+BRL2(tot.valor/(tot.sacas||1))+'/sc')}
-    ${kpi('A receber',BRL(tot.aberto),tot.aberto?'confira os prazos das NFs':'tudo recebido')}
+    ${kpi('A receber',BRL(tot.aberto),foraAberto>0?'+ '+BRL(foraAberto)+' de outras safras':tot.aberto?'confira os prazos das NFs':'tudo recebido')}
   </div>
   <div class="row2">
     <div class="panel"><h3>Sacas por talhão</h3>
@@ -897,22 +899,28 @@ function pgGrao(cult){
   </tbody></table></div>`;
 }
 
+/* títulos a pagar/receber em aberto: o filtro de safra não os esconde — dívida e crédito de safra
+   passada continuam valendo até a baixa */
+function finPendentes(){return db.fin.filter(f=>f.status==='previsto');}
 function pgFin(){
   const finF=F(db.fin);
   const rel=finF.filter(f=>f.status==='realizado');
   const saldo=rel.reduce((a,f)=>a+(f.tipo==='entrada'?f.valor:-f.valor),0);
-  const pagar=finF.filter(f=>f.status==='previsto'&&f.tipo==='saida').reduce((a,f)=>a+f.valor,0);
-  const cargasAbertas=F(db.cargas).filter(c=>!c.pago).reduce((a,c)=>a+cargaCalc(c).valor,0);
-  const receber=finF.filter(f=>f.status==='previsto'&&f.tipo==='entrada'&&!f.cargaId).reduce((a,f)=>a+f.valor,0)
+  const pend=finPendentes();
+  const pagar=pend.filter(f=>f.tipo==='saida').reduce((a,f)=>a+f.valor,0);
+  const cargasAbertas=db.cargas.filter(c=>!c.pago).reduce((a,c)=>a+cargaCalc(c).valor,0);
+  const receber=pend.filter(f=>f.tipo==='entrada'&&!f.cargaId).reduce((a,f)=>a+f.valor,0)
     +cargasAbertas;
+  /* a tabela mostra a safra filtrada mais os pendentes que o filtro deixou de fora (sem repetir) */
+  const dentro=new Set(finF),linhas=[...finF,...pend.filter(f=>!dentro.has(f))];
   const centros=['Cafe','Milho','Soja','Sorgo','Trigo','Oficina','Adm'];
   const gastoC=centros.map(c=>rel.filter(f=>f.tipo==='saida'&&f.centro===c).reduce((a,f)=>a+f.valor,0));
   const maxG=Math.max(...gastoC,1);
   return `<h1>Administração & financeiro</h1><p class="sub">Contas a pagar/receber, fluxo de caixa e custos por centro (cultura, oficina, administração)</p>
   <div class="cards">
-    ${kpi('Saldo realizado',BRL(saldo),'entradas − saídas no ano')}
-    ${kpi('A pagar (previsto)',BRL(pagar),'títulos lançados')}
-    ${kpi('A receber',BRL(receber),'inclui cargas de grãos pendentes')}
+    ${kpi('Saldo realizado',BRL(saldo),anoFiltro?'entradas − saídas na safra '+anoFiltro:'entradas − saídas · todas as safras')}
+    ${kpi('A pagar (previsto)',BRL(pagar),'títulos lançados · todas as safras')}
+    ${kpi('A receber',BRL(receber),'inclui cargas de grãos pendentes · todas as safras')}
     ${kpi('Posição projetada',BRL(saldo+receber-pagar),'saldo + a receber − a pagar')}
   </div>
   <div class="row2">
@@ -934,8 +942,8 @@ function pgFin(){
       </form></div>
   </div>
   <div class="tblwrap"><table><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Centro</th><th class="num">Valor</th><th>Situação</th><th></th></tr></thead><tbody>
-    ${finF.slice().sort((a,b)=>a.data<b.data?1:-1).map(f=>{const linked=!!(f.cargaId||f.vendaId||f.pulvOSId);return `<tr>
-      <td>${dBRy(f.data)}</td><td>${esc(f.desc)}</td><td>${esc(f.categoria)}</td><td>${f.centro==='Cafe'?'Café':esc(f.centro)}</td>
+    ${linhas.sort((a,b)=>a.data<b.data?1:-1).map(f=>{const linked=!!(f.cargaId||f.vendaId||f.pulvOSId);return `<tr>
+      <td>${dBRy(f.data)}</td><td>${esc(f.desc)}${dentro.has(f)?'':` <span class="pill warn">safra ${esc(safraDe(f.data)||'sem data')}</span>`}</td><td>${esc(f.categoria)}</td><td>${f.centro==='Cafe'?'Café':esc(f.centro)}</td>
       <td class="num" style="color:${f.tipo==='entrada'?'var(--good)':'inherit'}">${f.tipo==='entrada'?'+':'−'} ${BRL(f.valor)}</td>
       <td>${f.status==='realizado'?'<span class="pill good">realizado</span>':`<button class="btn mini" data-action="baixa" data-id="${f.id}">Dar baixa</button>`}</td>
       <td>${linked?'<span class="linked-record" title="Altere ou exclua pelo módulo de origem">Gerenciado pela origem</span>':`<button class="x" data-action="del" data-col="fin" data-id="${f.id}" title="Excluir">✕</button>`}</td></tr>`;}).join('')}
