@@ -3124,11 +3124,25 @@ function referencesFor(col,id){
       ['arruacoes','talhaoId'],['capinas','talhaoId'],['geoTalhoes','talhaoId'],['mip','talhaoId'],['bienal','talhaoId'],['os','talhaoId'],['documentos','talhaoId']],
     func:[['apont','funcId'],['medicoes','funcId'],['os','responsavelId']],
     maquinas:[['os','maqId'],['regColheita','maquinaId'],['regAplicacao','maquinaId'],['abastecimentos','maqId'],['lembretes','maqId']],
-    receitas:[['pulvOS','receitaId']],pulvOS:[['fin','pulvOSId']],
+    receitas:[['pulvOS','receitaId']],
     lotes:[['secagens','loteId'],['vendasCafe','loteId']]
   };
   if(col==='defensivos'){const n=db.receitas.filter(r=>(r.itens||[]).some(i=>i.prodId===id)).length;return n?[['receitas',n]]:[];}
   return (rules[col]||[]).map(([collection,key])=>[collection,db[collection].filter(x=>x[key]===id).length]).filter(x=>x[1]);
+}
+/* desfaz a conclusão de uma aplicação: devolve os defensivos ao estoque e remove o custo do Financeiro.
+   Usa o que foi baixado (o.baixas); ordens concluídas antes de existir esse campo recalculam dose × área
+   pela receita atual, e produto que não existe mais é ignorado. */
+function estornaAplicacao(o){
+  let baixas=o.baixas;
+  if(!Array.isArray(baixas)){
+    const r=db.receitas.find(x=>x.id===o.receitaId),soma=new Map();
+    for(const i of r?.itens||[])soma.set(i.prodId,(soma.get(i.prodId)||0)+Number(i.dose)*Number(o.area));
+    baixas=[...soma].map(([prodId,qtd])=>({prodId,qtd}));
+  }
+  baixas.forEach(({prodId,qtd})=>{const p=db.defensivos.find(d=>d.id===prodId),n=Number(qtd);
+    if(p&&Number.isFinite(n)&&n>0)p.qtd=(Number(p.qtd)||0)+n;});
+  db.fin=db.fin.filter(f=>f.pulvOSId!==o.id);
 }
 function deleteBlock(col,id){
   const rec=db[col]?.find(x=>x.id===id);
@@ -3205,7 +3219,11 @@ $main.addEventListener('click',async e=>{
   else if(a==='del'){
     const col=b.dataset.col,block=deleteBlock(col,id);if(block){showStatus(block,{timeout:0});return;}
     const alvo=db[col].find(x=>x.id===id);
-    if(!confirm(`Excluir permanentemente “${recordName(alvo)}”? Você poderá desfazer logo após a exclusão.`))return;
+    const concluida=col==='pulvOS'&&alvo.status==='concluida';
+    if(concluida){
+      if(!confirm(`Excluir a aplicação concluída de ${dBRy(dataAplicacao(alvo))} em ${tal(alvo.talhaoId).nome}? O custo sai do Financeiro e os defensivos voltam ao estoque. Você poderá desfazer logo após a exclusão.`))return;
+    }
+    else if(!confirm(`Excluir permanentemente “${recordName(alvo)}”? Você poderá desfazer logo após a exclusão.`))return;
     const recovered=await beginUndo('Exclusão de registro');
     if(col==='documentos'&&!recovered)return;
     // Anexos removidos ficam retidos no IndexedDB para recuperação após recarregar.
@@ -3214,6 +3232,7 @@ $main.addEventListener('click',async e=>{
     if(col==='secagens'&&alvo){const lt=db.lotes.find(l=>l.id===alvo.loteId);if(lt&&lt.status==='secando')lt.status='terreiro';}
     if(col==='vendasCafe')db.fin=db.fin.filter(fx=>fx.vendaId!==id);
     if(col==='cargas')db.fin=db.fin.filter(fx=>fx.cargaId!==id);
+    if(concluida)estornaAplicacao(alvo);
     if(col==='os'&&osSelecionada===id)osSelecionada='';
     changed=true;statusMessage='Registro excluído.';
   }
@@ -3367,6 +3386,7 @@ $main.addEventListener('click',async e=>{
     if(!confirm(`Concluir a aplicação de ${dBRy(quando)} em ${N(o.area,1)} ha? Serão baixados os defensivos e lançado o custo de ${BRL2(custo)}.${aviso}`))return;
     await beginUndo('Conclusão de aplicação');
     required.forEach(({p,need})=>{p.qtd-=need;});
+    o.baixas=required.map(({p,need})=>({prodId:p.id,qtd:need}));
     const cult=(tal(o.talhaoId).cultura||'cafe');
     db.fin.push({id:uid(),data:quando,tipo:'saida',categoria:'Defensivos',centro:cult==='cafe'?'Cafe':cult[0].toUpperCase()+cult.slice(1),
       desc:'Aplicação: '+r.nome+' — '+tal(o.talhaoId).nome+' ('+N(o.area,1)+' ha)',valor:custo,status:'realizado',pulvOSId:o.id});

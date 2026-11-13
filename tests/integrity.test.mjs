@@ -431,3 +431,38 @@ test('grãos e painel dizem o que está fora do filtro de safra',()=>{
   assert.match(a.run('pgDash()'),/realizado · todas as safras/);
   assert.match(a.run('pgFin()'),/entradas − saídas · todas as safras/);
 });
+test('aplicação concluída pode ser excluída: devolve estoque e remove o custo',async()=>{
+  const a=setup();const id=a.run('db.pulvOS.find(o=>o.status==="aberta").id');
+  // arredonda: 12-0.85+0.85 não volta exatamente a 12 em ponto flutuante
+  a.run('globalThis.estoque=()=>JSON.stringify(db.defensivos.map(d=>[d.id,+Number(d.qtd).toFixed(6)]))');
+  const antes=a.run('estoque()'),nFin=a.run('db.fin.length');
+  await a.click('concluir-pos',null,id);
+  assert.equal(a.run(`db.pulvOS.find(o=>o.id==='${id}').status`),'concluida');
+  assert.ok(a.run(`db.pulvOS.find(o=>o.id==='${id}').baixas.length`)>0);
+  assert.equal(a.run(`deleteBlock('pulvOS','${id}')`),'');
+  await a.click('del','pulvOS',id);
+  assert.equal(a.run(`db.pulvOS.some(o=>o.id==='${id}')`),false);
+  assert.equal(a.run('db.fin.length'),nFin);
+  assert.equal(a.run('estoque()'),antes);
+  a.run("normalizeDatabase(JSON.parse(JSON.stringify(db)),{strict:true})");
+});
+test('aplicação antiga sem baixas e com produto excluído ainda pode ser excluída',async()=>{
+  const a=setup();
+  a.run(`db.defensivos=[{id:'p1',nome:'A',qtd:5,preco:1}];db.receitas=[{id:'r1',nome:'R',itens:[{prodId:'p1',dose:2},{prodId:'sumiu',dose:1}]}];
+    db.pulvOS=[{id:'o1',talhaoId:'c1',receitaId:'r1',area:3,status:'concluida',data:'2026-06-01',dataAplicacao:'2026-06-01'}];
+    db.fin=[{id:'f1',data:'2026-06-01',tipo:'saida',valor:6,status:'realizado',pulvOSId:'o1'}];`);
+  await a.click('del','pulvOS','o1');
+  assert.equal(a.run('db.pulvOS.length'),0);assert.equal(a.run('db.fin.length'),0);
+  assert.equal(a.run('db.defensivos[0].qtd'),11);
+});
+test('excluir aplicação concluída pode ser desfeito e restaura estoque, custo e carência',async()=>{
+  const a=setup();const id=a.run('db.pulvOS.find(o=>o.status==="aberta").id');
+  a.run('globalThis.estoque=()=>JSON.stringify(db.defensivos.map(d=>[d.id,+Number(d.qtd).toFixed(6)]))');
+  await a.click('concluir-pos',null,id);
+  const concluido=a.run('estoque()'),nFin=a.run('db.fin.length');
+  await a.click('del','pulvOS',id);
+  await a.run('undoLast()');
+  assert.equal(a.run(`db.pulvOS.find(o=>o.id==='${id}').status`),'concluida');
+  assert.equal(a.run('estoque()'),concluido);assert.equal(a.run('db.fin.length'),nFin);
+  assert.equal(a.run(`db.fin.some(f=>f.pulvOSId==='${id}')`),true);
+});
