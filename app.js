@@ -719,6 +719,7 @@ function pgDash(){
       return `<div class="alert"><span class="pill warn">pulverização</span> ${dBR(o.data)} — ${esc(r.nome)} em ${esc(tal(o.talhaoId).nome)}</div>`;}),
     ...db.talhoes.map(t=>{const c=statusCarencia(t.id);
       if(!c)return '';
+      if(!c.libera)return `<div class="alert"><span class="pill warn">reentrada</span> <b>${esc(t.nome)}</b> — entrada no talhão liberada em ${dBRy(c.liberaRe)} (${esc(c.receita)})</div>`;
       return `<div class="alert"><span class="pill crit">carência</span> <b>${esc(t.nome)}</b> — não colher até ${dBRy(c.libera||c.liberaRe)}${c.prod?' ('+esc(c.prod)+', '+N(c.dias)+' dias)':''}</div>`;}).filter(x=>x),
     ...osAb.map(o=>`<div class="alert"><span class="pill ${osAtrasada(o)?'crit':'warn'}">${osAtrasada(o)?'OS atrasada':'OS ativa'}</span> <b>${esc(o.codigo)}</b> — ${esc(o.titulo)} · ${esc(osResponsavel(o))}</div>`),
     ...revProx.map(m=>`<div class="alert"><span class="pill warn">revisão</span> ${esc(m.nome)} — ${N(m.horimetro)} h (plano: ${N(m.proxRev)} h)</div>`),
@@ -1272,10 +1273,14 @@ function statusCarencia(talhaoId,ref){
   ref=ref||hoje;let pior=null;
   db.pulvOS.filter(o=>o.talhaoId===talhaoId&&o.status==='concluida').forEach(o=>{
     const r=db.receitas.find(x=>x.id===o.receitaId);if(!r)return;
-    const {dias,horas,prod}=carenciaReceita(r),data=dataAplicacao(o);
+    const data=dataAplicacao(o);if(!ISO_DIA.test(String(data||'')))return;
+    const {dias,horas,prod}=carenciaReceita(r);
     const libera=addDias(data,dias),liberaRe=addDias(data,Math.ceil(horas/24));
-    if(dias&&libera>ref&&(!pior||libera>pior.libera))pior={libera,liberaRe,prod,receita:r.nome,data,dias,horas};
-    else if(!dias&&horas&&liberaRe>ref&&!pior)pior={libera:null,liberaRe,prod,receita:r.nome,data,dias,horas};
+    const reg={libera,liberaRe,prod,receita:r.nome,data,dias,horas};
+    /* carência vigente vence a aplicação de só reentrada (libera:null), em qualquer ordem das ordens;
+       entre duas do mesmo tipo vale a que libera mais tarde */
+    if(dias&&libera>ref){if(!pior||!pior.libera||libera>pior.libera)pior=reg;}
+    else if(!dias&&horas&&liberaRe>ref){if(!pior||(!pior.libera&&liberaRe>pior.liberaRe))pior={...reg,libera:null};}
   });
   return pior;
 }
@@ -2197,13 +2202,13 @@ function mapaSVG(modo){
   const cx=lon=>(lon-minLon)*k*s+(W-(maxLon-minLon)*k*s)/2;
   const cy=lat=>H-((lat-minLat)*s+(H-(maxLat-minLat)*s)/2);
   const corDe=g=>{
-    if(modo==='carencia')return g.talhaoId?(statusCarencia(g.talhaoId)?'var(--crit)':'var(--good)'):'var(--muted)';
+    if(modo==='carencia')return g.talhaoId?(statusCarencia(g.talhaoId)?.libera?'var(--crit)':'var(--good)'):'var(--muted)';
     return CORES_MAPA[g.cultura]||'var(--muted)';
   };
   const polys=gts.map(g=>{
     const pts=g.coords.map(c=>cx(c[0])+','+cy(c[1])).join(' ');
     const t=tal(g.talhaoId),car=g.talhaoId?statusCarencia(g.talhaoId):null,cor=corDe(g);
-    const tip=`${esc(g.nome||t.nome)} — ${N(g.areaHa,1)} ha${g.talhaoId?' · '+esc(NOMES_CULT[t.cultura]||t.cultura):' · não vinculado'}${car?' · ⚠️ em carência':''}`;
+    const tip=`${esc(g.nome||t.nome)} — ${N(g.areaHa,1)} ha${g.talhaoId?' · '+esc(NOMES_CULT[t.cultura]||t.cultura):' · não vinculado'}${car&&car.libera?' · ⚠️ em carência':''}`;
     return `<polygon points="${pts}" fill="${cor}" fill-opacity="0.45" stroke="${cor}" stroke-width="1.5" data-tip="${tip}" aria-label="${tip}" ${g.talhaoId?'tabindex="0" role="button" style="cursor:pointer"':'role="img"'} data-action="ficha-talhao-mapa" data-id="${g.talhaoId}"/>`;
   }).join('');
   const pontos=db.mip.filter(hasCoords).map(m=>{
@@ -2326,7 +2331,9 @@ function pgTalhao(){
   const car=statusCarencia(t.id);
   return `<h1>Ficha do talhão</h1>
   <p class="sub">A história completa do talhão — solo, correções, aplicações, colheitas e lotes — na ordem em que aconteceu. Use o filtro de safra da barra lateral para ver um ano específico.</p>
-  ${car?`<div class="panel" style="border-color:var(--crit)"><h3 style="color:var(--crit)">⚠️ Talhão em carência</h3>
+  ${car&&!car.libera?`<div class="panel" style="border-color:var(--warn)"><h3>⏳ Intervalo de reentrada</h3>
+    <p style="margin:0;font-size:14px">Aplicação de <b>${esc(car.receita)}</b> em ${dBRy(car.data)}. Entrada no talhão liberada em <b>${dBRy(car.liberaRe)}</b> (${N(car.horas)} h após a aplicação).</p></div>`:''}
+  ${car&&car.libera?`<div class="panel" style="border-color:var(--crit)"><h3 style="color:var(--crit)">⚠️ Talhão em carência</h3>
     <p style="margin:0;font-size:14px">Aplicação de <b>${esc(car.receita)}</b> em ${dBRy(car.data)}${car.prod?` (${esc(car.prod)}, carência de ${N(car.dias)} dias)`:''}.
     <b>Não colher antes de ${dBRy(car.libera||car.liberaRe)}</b>${car.libera?` — faltam ${N(diasEntre(hoje,car.libera))} dias`:''}.${car.horas?` Reentrada no talhão liberada após ${N(car.horas)} h da aplicação.`:''}</p></div>`:''}
   <div class="panel"><form class="f" data-passive-form>

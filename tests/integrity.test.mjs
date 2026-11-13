@@ -367,3 +367,39 @@ test('textos importados saem escapados em todas as páginas, no caderno e no KML
   for(const t of ['c1','tx']){a.run(`cadernoCampo('${t}')`);assert.ok(!a.run('impresso').includes('<i/id=inj>'),`caderno ${t}`);}
   a.run('exportarKML()');assert.ok(!(await a.run('kml.text()')).includes('<i/id=inj>'),'KML exportado');
 });
+test('carência real não é escondida por aplicação recente só com reentrada',()=>{
+  const a=setup();
+  a.run(`db.defensivos=[{id:'h',nome:'Herb',carencia:0,reentrada:24,qtd:9,preco:1},{id:'f',nome:'Fung',carencia:30,reentrada:24,qtd:9,preco:1}];
+    db.receitas=[{id:'rh',nome:'H',itens:[{prodId:'h',dose:1}]},{id:'rf',nome:'F',itens:[{prodId:'f',dose:1}]}];
+    db.pulvOS=[{id:'o1',talhaoId:'c1',receitaId:'rh',area:1,status:'concluida',data:hoje,dataAplicacao:hoje},
+      {id:'o2',talhaoId:'c1',receitaId:'rf',area:1,status:'concluida',data:addDias(hoje,-10),dataAplicacao:addDias(hoje,-10)}];`);
+  assert.equal(a.run('statusCarencia("c1").libera'),a.run('addDias(hoje,20)'));
+  assert.equal(a.run('statusCarencia("c1").prod'),'Fung');
+  a.run('db.pulvOS.reverse()');
+  assert.equal(a.run('statusCarencia("c1").libera'),a.run('addDias(hoje,20)'));
+  a.run('db.pulvOS=db.pulvOS.filter(o=>o.id==="o1")');
+  assert.equal(a.run('statusCarencia("c1").libera'),null);
+  assert.equal(a.run('statusCarencia("c1").liberaRe'),a.run('addDias(hoje,1)'));
+  assert.doesNotMatch(a.run('pgDash()'),/não colher até/);
+  assert.match(a.run('pgDash()'),/entrada no talhão liberada em/);
+});
+test('só reentrada não vira carência no mapa nem na ficha; entre reentradas vale a mais tardia em qualquer ordem',()=>{
+  const a=setup();
+  a.run(`db.defensivos=[{id:'h',nome:'Herb',carencia:0,reentrada:24,qtd:9,preco:1},{id:'g',nome:'Glifo',carencia:0,reentrada:72,qtd:9,preco:1},{id:'f',nome:'Fung',carencia:30,reentrada:24,qtd:9,preco:1}];
+    db.receitas=[{id:'rh',nome:'H',itens:[{prodId:'h',dose:1}]},{id:'rg',nome:'G',itens:[{prodId:'g',dose:1}]},{id:'rf',nome:'F',itens:[{prodId:'f',dose:1}]}];
+    db.pulvOS=[{id:'o1',talhaoId:'c1',receitaId:'rg',area:1,status:'concluida',data:hoje,dataAplicacao:hoje},
+      {id:'o2',talhaoId:'c1',receitaId:'rh',area:1,status:'concluida',data:hoje,dataAplicacao:hoje}];
+    db.mip=[];db.geoTalhoes=[{id:'g1',talhaoId:'c1',nome:'X',cultura:'cafe',coords:[[-45,-19],[-45.01,-19],[-45,-19.01]],areaHa:1}];talhaoSel='c1';`);
+  assert.equal(a.run('statusCarencia("c1").liberaRe'),a.run('addDias(hoje,3)'));
+  a.run('db.pulvOS.reverse()');
+  assert.equal(a.run('statusCarencia("c1").liberaRe'),a.run('addDias(hoje,3)'));
+  assert.equal(a.run('statusCarencia("c1").receita'),'G');
+  const mapa=a.run('mapaSVG("carencia")');
+  assert.doesNotMatch(mapa,/var\(--crit\)|em carência/);assert.match(mapa,/var\(--good\)/);
+  const ficha=a.run('pgTalhao()');
+  assert.match(ficha,/⏳ Intervalo de reentrada/);assert.match(ficha,/Entrada no talhão liberada em <b>/);assert.doesNotMatch(ficha,/Talhão em carência/);
+  a.run(`db.pulvOS.push({id:'o3',talhaoId:'c1',receitaId:'rf',area:1,status:'concluida',data:hoje,dataAplicacao:hoje})`);
+  assert.match(a.run('mapaSVG("carencia")'),/var\(--crit\)[\s\S]*em carência/);
+  const fichaCar=a.run('pgTalhao()');
+  assert.match(fichaCar,/⚠️ Talhão em carência/);assert.doesNotMatch(fichaCar,/Intervalo de reentrada/);
+});
