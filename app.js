@@ -535,6 +535,8 @@ const F=(arr,k='data')=>anoFiltro?arr.filter(x=>safraDe(x[k])===anoFiltro):arr;
 const somaCargas=cult=>F(db.cargas).filter(c=>c.cultura===cult)
   .reduce((a,c)=>{const x=cargaCalc(c);a.sacas+=x.sacas;a.valor+=x.valor;if(!c.pago)a.aberto+=x.valor;return a;},{sacas:0,valor:0,aberto:0});
 const areaCult=cult=>db.talhoes.filter(t=>t.cultura===cult).reduce((a,t)=>a+t.area,0);
+/* produtividade por hectare: área zero (ou ausente) dá 0, nunca Infinity/NaN na tela */
+const porHa=(valor,area)=>area>0?valor/area:0;
 const sacasDisponiveis=loteId=>{
   const l=db.lotes.find(x=>x.id===loteId);if(!l)return 0;
   return Math.max(0,(Number(l.sacas)||0)-db.vendasCafe.filter(v=>v.loteId===loteId).reduce((s,v)=>s+(Number(v.sacas)||0),0));
@@ -712,7 +714,7 @@ function pgDash(){
   const saldoDiesel=db.combCompras.reduce((a,c)=>a+c.litros,0)-db.abastecimentos.reduce((a,x)=>a+x.litros,0);
   const baixo=db.estoque.filter(i=>i.qtd<i.min);
   const osAb=db.os.filter(o=>OS_ATIVAS.has(o.status)),osAtr=osAb.filter(osAtrasada);
-  const revProx=db.maquinas.filter(m=>m.proxRev-m.horimetro<=50);
+  const revProx=db.maquinas.filter(m=>m.proxRev>0&&m.proxRev-m.horimetro<=50);
   const sem=semanasCafe();
   /* últimos 6 meses terminando no mês corrente */
   const meses=[];for(let i=5;i>=0;i--){const d=new Date(+hoje.slice(0,4),+hoje.slice(5,7)-1-i,1);
@@ -740,7 +742,7 @@ function pgDash(){
   ];
   return `<h1>Visão geral da safra</h1><p class="sub">Consolidado operacional e financeiro · atualizado em ${dBRy(hoje)}</p>
   <div class="cards">
-    ${kpi('Café colhido',N(sacasCafe,0)+' sc',N(litros/p.litrosPorCarreta,1)+' carretas · '+N(sacasCafe/areaCult('cafe'),1)+' sc/ha')}
+    ${kpi('Café colhido',N(sacasCafe,0)+' sc',N(litros/p.litrosPorCarreta,1)+' carretas · '+N(porHa(sacasCafe,areaCult('cafe')),1)+' sc/ha')}
     ${kpi('Milho entregue',N(mi.sacas,0)+' sc',BRL(mi.valor)+' · '+BRL(mi.aberto)+' a receber')}
     ${kpi('Soja entregue',N(so.sacas,0)+' sc',BRL(so.valor)+' · '+BRL(so.aberto)+' a receber')}
     ${kpi('Saldo de caixa',BRL(saldo),anoFiltro?'realizado na safra '+anoFiltro:'realizado · todas as safras')}
@@ -789,7 +791,7 @@ function pgCafe(){
   <div class="cards">
     ${kpi('Total colhido',N(carretas,1)+' carretas',N(litros)+' L · '+N(litros/p.litrosPorMedida,0)+' medidas')}
     ${kpi('Sacas estimadas',N(sacas,0)+' sc','beneficiadas (60 kg)')}
-    ${kpi('Produtividade',N(sacas/areaCult('cafe'),1)+' sc/ha',N(areaCult('cafe'),1)+' ha em produção')}
+    ${kpi('Produtividade',N(porHa(sacas,areaCult('cafe')),1)+' sc/ha',N(areaCult('cafe'),1)+' ha em produção')}
     ${kpi('Custo de colheita',BRL(custo),BRL(custo/(carretas||1))+' / carreta')}
     ${kpi('Mecanizada',horasMec?N(horasMec,1)+' h':'—',horasMec?N(litrosMec/LC/horasMec,2)+' carretas/h · '+N(litrosMec/horasMec,0)+' L/h':'sem horas apontadas')}
   </div>
@@ -804,8 +806,8 @@ function pgCafe(){
       ${talhoes.map(t=>{const l=cafeF.filter(r=>r.talhaoId===t.id).reduce((a,r)=>a+r.litros,0);
         const sc=l/p.litrosPorSaca;
         return `<div class="hbar"><span ${t.variedade?`data-tip="${esc(t.variedade)}"`:''}>${esc(t.nome)} · ${N(t.area,1)} ha</span>
-        <span class="bar" style="width:${Math.max(2,(sc/t.area)/45*100)}%;background:var(--cafe);opacity:.75"></span>
-        <span class="n">${N(sc,0)} sc · ${N(sc/t.area,1)} sc/ha</span></div>`;}).join('')}
+        <span class="bar" style="width:${Math.max(2,porHa(sc,t.area)/45*100)}%;background:var(--cafe);opacity:.75"></span>
+        <span class="n">${N(sc,0)} sc · ${N(porHa(sc,t.area),1)} sc/ha</span></div>`;}).join('')}
     </div>
   </div>
   ${(()=>{const bl=talhoes.map(t=>({t,c:statusCarencia(t.id)})).filter(x=>x.c&&x.c.libera);
@@ -874,7 +876,7 @@ function pgGrao(cult){
   <p class="sub">Romaneio por carga: pesagem, desconto de umidade (base 14%), NF-e e situação do pagamento</p>
   <div class="cards">
     ${kpi('Cargas',rows.length,rows.filter(c=>!c.pago).length+' com pagamento pendente')}
-    ${kpi('Sacas entregues',N(tot.sacas,0)+' sc',N(tot.sacas/(area||1),1)+' sc/ha · '+N(area)+' ha')}
+    ${kpi('Sacas entregues',N(tot.sacas,0)+' sc',N(porHa(tot.sacas,area),1)+' sc/ha · '+N(area)+' ha')}
     ${kpi('Valor bruto',BRL(tot.valor),'preço médio '+BRL2(tot.valor/(tot.sacas||1))+'/sc')}
     ${kpi('A receber',BRL(tot.aberto),foraAberto>0?'+ '+BRL(foraAberto)+' de outras safras':tot.aberto?'confira os prazos das NFs':'tudo recebido')}
   </div>
@@ -922,7 +924,7 @@ function pgFin(){
     +cargasAbertas;
   /* a tabela mostra a safra filtrada mais os pendentes que o filtro deixou de fora (sem repetir) */
   const dentro=new Set(finF),linhas=[...finF,...pend.filter(f=>!dentro.has(f))];
-  const centros=['Cafe','Milho','Soja','Sorgo','Trigo','Oficina','Adm'];
+  const centros=['Cafe','Milho','Soja','Sorgo','Trigo','Oficina','Adm','Cobertura'];
   const gastoC=centros.map(c=>rel.filter(f=>f.tipo==='saida'&&f.centro===c).reduce((a,f)=>a+f.valor,0));
   const maxG=Math.max(...gastoC,1);
   return `<h1>Administração & financeiro</h1><p class="sub">Contas a pagar/receber, fluxo de caixa e custos por centro (cultura, oficina, administração)</p>
@@ -1023,7 +1025,7 @@ function pgOficina(){
     ${db.maquinas.map(m=>{const falta=m.proxRev-m.horimetro;
       return `<tr><td>${esc(m.nome)}</td><td>${esc(m.tipo)}</td>
       <td class="num">${N(m.horimetro)} h</td><td class="num">${N(m.proxRev)} h</td>
-      <td>${falta<=0?'<span class="pill crit">revisão vencida</span>':falta<=50?'<span class="pill warn">faltam '+N(falta)+' h</span>':'<span class="pill good">em dia</span>'}</td>
+      <td>${!(m.proxRev>0)?'<span class="pill neutral">sem plano</span>':falta<=0?'<span class="pill crit">revisão vencida</span>':falta<=50?'<span class="pill warn">faltam '+N(falta)+' h</span>':'<span class="pill good">em dia</span>'}</td>
       <td><button class="x" data-action="del" data-col="maquinas" data-id="${m.id}" title="Excluir">✕</button></td></tr>`;}).join('')}
   </tbody></table></div>
   <div class="panel"><h3>Nova máquina / OS de manutenção</h3>
@@ -2342,9 +2344,9 @@ function pgTalhao(){
   const ua=db.solos.filter(s=>s.talhaoId===t.id).sort((a,b)=>a.data<b.data?1:-1)[0];
   let prod='—';
   if(t.cultura==='cafe'){const l=F(db.cafe).filter(r=>r.talhaoId===t.id).reduce((a,r)=>a+r.litros,0);
-    if(l)prod=N(l/p.litrosPorSaca/t.area,1)+' sc/ha';}
+    if(l)prod=N(porHa(l/p.litrosPorSaca,t.area),1)+' sc/ha';}
   else{const sc=F(db.cargas).filter(c=>c.talhaoId===t.id).reduce((a,c)=>a+cargaCalc(c).sacas,0);
-    if(sc)prod=N(sc/t.area,1)+' sc/ha';}
+    if(sc)prod=N(porHa(sc,t.area),1)+' sc/ha';}
   const car=statusCarencia(t.id);
   return `<h1>Ficha do talhão</h1>
   <p class="sub">A história completa do talhão — solo, correções, aplicações, colheitas e lotes — na ordem em que aconteceu. Use o filtro de safra da barra lateral para ver um ano específico.</p>
@@ -3133,7 +3135,7 @@ $main.addEventListener('submit',async e=>{
   }
   else if(f.id==='f-mip')db.mip.push({id:uid(),data:val(f,'data'),talhaoId:val(f,'talhaoId'),tipo:val(f,'tipo'),
     nivel:num(f,'nivel'),lat:val(f,'lat')===''?null:num(f,'lat'),lon:val(f,'lon')===''?null:num(f,'lon'),obs:val(f,'obs')});
-  else if(f.id==='f-param'){db.params.litrosPorSaca=num(f,'litrosPorSaca')||480;db.params.litrosPorMedida=num(f,'litrosPorMedida')||60;db.params.litrosPorCarreta=num(f,'litrosPorCarreta')||5000;db.params.minDiesel=num(f,'minDiesel')||1000;db.params.diariaMinima=num(f,'diariaMinima')||100;db.params.mesInicioSafra=num(f,'mesInicioSafra')||10;anoFiltro='';}
+  else if(f.id==='f-param'){db.params.litrosPorSaca=num(f,'litrosPorSaca')||480;db.params.litrosPorMedida=num(f,'litrosPorMedida')||60;db.params.litrosPorCarreta=num(f,'litrosPorCarreta')||5000;db.params.minDiesel=num(f,'minDiesel')||1000;db.params.diariaMinima=num(f,'diariaMinima')||100;db.params.mesInicioSafra=num(f,'mesInicioSafra')||10;anoFiltro=safraDe(hoje);}
   /* modo edição: o objeto recém-criado substitui o registro original, preservando flags de fluxo */
   const colE=FORM_COL[f.id];
   if(colE&&f.dataset.editId){

@@ -581,3 +581,33 @@ test('data e dataInicio ausentes viram texto vazio nos dois modos, sem mexer no 
     assert.equal(a.run(`'data' in ${v}.talhoes[0]`),false);
   }
 });
+test('máquina sem plano de revisão não gera alerta',async()=>{
+  const a=setup();await a.submit('f-maq',{nome:'Maquina Nova',tipo:'Trator',horimetro:10,proxRev:0});
+  assert.doesNotMatch(a.run('pgDash()'),/revisão<\/span> Maquina Nova/);
+  assert.match(a.run('pgOficina()'),/Maquina Nova[\s\S]{0,400}sem plano/);
+});
+test('máquina com plano de revisão continua gerando alerta e selo',()=>{
+  const a=setup();
+  a.run("db.maquinas.push({id:'mq9',nome:'Maquina Plano',tipo:'Trator',horimetro:1180,proxRev:1200},{id:'mq8',nome:'Maquina Vencida',tipo:'Trator',horimetro:1300,proxRev:1200})");
+  assert.match(a.run('pgDash()'),/revisão<\/span> Maquina Plano/);
+  assert.match(a.run('pgDash()'),/revisão<\/span> Maquina Vencida/);
+  assert.match(a.run('pgOficina()'),/Maquina Plano[\s\S]{0,400}faltam 20 h/);
+  assert.match(a.run('pgOficina()'),/Maquina Vencida[\s\S]{0,400}revisão vencida/);
+});
+test('talhão com área zero não mostra infinito',()=>{
+  const a=setup();a.run("db.talhoes.find(t=>t.id==='c3').area=0;anoFiltro='';talhaoSel='c3'");
+  for(const p of ['pgCafe()','pgDash()','pgTalhao()'])assert.doesNotMatch(a.run(p),/Infinity|∞|NaN/);
+});
+test('sem nenhum talhão de café com área, produtividade e telas não mostram infinito',()=>{
+  const a=setup();a.run("db.talhoes.filter(t=>t.cultura==='cafe').forEach(t=>t.area=0);anoFiltro=''");
+  for(const p of ['pgCafe()','pgDash()'])assert.doesNotMatch(a.run(p),/Infinity|∞|NaN/);
+  assert.equal(a.run('porHa(10,0)'),0);assert.equal(a.run('porHa(10,4)'),2.5);assert.equal(a.run('porHa(10,undefined)'),0);
+});
+test('salvar parâmetros mantém o filtro na safra corrente',async()=>{
+  const a=setup();
+  await a.submit('f-param',{litrosPorCarreta:5000,litrosPorSaca:480,litrosPorMedida:60,minDiesel:1000,diariaMinima:100,mesInicioSafra:10});
+  assert.equal(a.run('anoFiltro'),a.run('safraDe(hoje)'));
+});
+test('centro Cobertura aparece nas saídas por centro',()=>{
+  const a=setup();assert.match(a.run('pgFin()'),/<span>Cobertura<\/span>/);
+});

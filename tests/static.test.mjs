@@ -107,3 +107,4 @@ test('render usa rolagemAposRender e paginaHTML, não rola sempre ao topo nem ch
   assert.match(js,/\+paginaHTML\(rota\)/);
   assert.doesNotMatch(js,/window\.scrollTo\(0,0\)/);assert.doesNotMatch(js,/PAGES\[rota\]\(\)/);
 });
+test('colunas de row2 podem encolher',()=>assert.match(css,/\.row2>\*\{min-width:0\}/));

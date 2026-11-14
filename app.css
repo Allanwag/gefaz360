@@ -76,6 +76,7 @@
   .panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-top:12px}
   .panel h2,.panel h3,.panel-title{margin:0 0 10px;font-size:14px;font-weight:700}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .row2>*{min-width:0}
   @media(max-width:900px){.row2{grid-template-columns:1fr}}
   .tblwrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface);margin-top:12px}
   table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:640px}
