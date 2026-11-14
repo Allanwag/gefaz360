@@ -3165,7 +3165,14 @@ function deleteBlock(col,id){
   if(col==='medicoes'&&(rec.acertada||rec.consolidada))return 'Medições acertadas ou consolidadas não podem ser excluídas.';
   if(col==='fin'&&(rec.cargaId||rec.vendaId||rec.pulvOSId))return 'Este lançamento é gerenciado pelo módulo de origem. Altere ou exclua o registro de origem.';
   const refs=referencesFor(col,id);
-  return refs.length?'Não é possível excluir enquanto estiver em uso por '+refs.map(([c,n])=>`${n} ${(REF_LABELS[c]||[c,c])[n===1?0:1]}`).join(', ')+'.':'';
+  if(refs.length)return 'Não é possível excluir enquanto estiver em uso por '+refs.map(([c,n])=>`${n} ${(REF_LABELS[c]||[c,c])[n===1?0:1]}`).join(', ')+'.';
+  if(col==='lotes'){
+    /* vendas sem lote contam contra o total beneficiado: sem as sacas deste lote o total pode ficar abaixo do vendido */
+    const semEste=db.lotes.filter(l=>l.id!==id).reduce((s,l)=>s+(Number(l.sacas)||0),0);
+    const vendido=db.vendasCafe.reduce((s,v)=>s+(Number(v.sacas)||0),0);
+    if(vendido>semEste+0.001)return 'Não é possível excluir: as vendas de café sem lote vinculado dependem das sacas deste lote. Exclua ou vincule as vendas primeiro.';
+  }
+  return '';
 }
 function recordName(rec){return String(rec?.nome||rec?.codigo||rec?.titulo||rec?.desc||rec?.nf||rec?.data||'registro').slice(0,90);}
 

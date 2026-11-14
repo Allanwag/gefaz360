@@ -499,3 +499,22 @@ test('trocar o lote no formulário de qualidade preenche os campos com o que já
   await a.change(alvo(id1));
   for(const n of ['cobTipo','cobBebida','scaa','peneira','peneiraPct','aroma','sabor','acidez','corpo','fin','descritores'])assert.equal(a.run(`fq.elements.${n}.value`),'',n);
 });
+test('lote não pode ser excluído se as vendas sem lote dependem das sacas dele',async()=>{
+  const a=setup();
+  a.run(`db.lotes=[{id:'l1',codigo:'L1',talhaoId:'c1',sacas:46,status:'beneficiado',data:'2026-07-08'}];db.secagens=[];
+    db.vendasCafe=[{id:'v1',data:'2026-07-14',loteId:'',sacas:30,preco:1}];db.fin=[];`);
+  assert.match(a.run("deleteBlock('lotes','l1')"),/vendas de café sem lote/);
+  await a.click('del','lotes','l1');assert.equal(a.run('db.lotes.length'),1);
+  a.run('db.vendasCafe=[]');
+  assert.equal(a.run("deleteBlock('lotes','l1')"),'');
+});
+test('lote pode ser excluído se os outros lotes ainda cobrem as vendas sem lote',async()=>{
+  const a=setup();
+  a.run(`db.lotes=[{id:'l1',codigo:'L1',talhaoId:'c1',sacas:46,status:'beneficiado',data:'2026-07-08'},
+      {id:'l2',codigo:'L2',talhaoId:'c1',sacas:30,status:'beneficiado',data:'2026-07-09'}];db.secagens=[];
+    db.vendasCafe=[{id:'v1',data:'2026-07-14',loteId:'',sacas:30,preco:1}];db.fin=[];`);
+  assert.equal(a.run("deleteBlock('lotes','l1')"),'');
+  await a.click('del','lotes','l1');assert.equal(a.run('db.lotes.length'),1);
+  assert.match(a.run("deleteBlock('lotes','l2')"),/vendas de café sem lote/);
+  a.run("normalizeDatabase(JSON.parse(JSON.stringify(db)),{strict:true})");
+});
