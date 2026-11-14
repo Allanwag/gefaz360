@@ -1689,7 +1689,7 @@ function pgPos(){
         <label>Descritores<input name="descritores" style="width:210px" placeholder="chocolate, caramelo, cítrico…"></label>
         <button class="btn" ${db.lotes.some(l=>l.status==='seco'||l.status==='beneficiado')?'':'disabled'}>Salvar qualidade</button>
       </form>
-      <p class="note">COB é a classificação oficial brasileira (tipo por defeitos + bebida); SCAA é a pontuação de prova — <b>≥ 80 pontos é café especial</b>. Os atributos sensoriais (0–10) e os descritores compõem o perfil de xícara do lote.</p></div>
+      <p class="note">COB é a classificação oficial brasileira (tipo por defeitos + bebida); SCAA é a pontuação de prova — <b>≥ 80 pontos é café especial</b>. Os atributos sensoriais (0–10) e os descritores compõem o perfil de xícara do lote. Campos em branco mantêm o que já está registrado no lote.</p></div>
     <div class="panel">${(()=>{
       const sl=db.lotes.filter(l=>l.sens).sort((a,b)=>a.data<b.data?1:-1)[0];
       if(!sl)return '<h3>Perfil sensorial</h3><p class="sub">Registre os atributos de um lote para ver o perfil.</p>';
@@ -2936,11 +2936,23 @@ $main.addEventListener('change',e=>{
     const t=db.talhoes.find(x=>x.id===e.target.value);
     fr.elements.variedade.value=t&&t.variedade?t.variedade:'';
   }
+  const fq=e.target.closest&&e.target.closest('#f-qual');
+  if(fq&&e.target.name==='loteId')preencheQualidade(fq,db.lotes.find(l=>l.id===e.target.value));
   if(e.target.id==='mapa-modo'){mapaModo=e.target.value;render();}
 });
 
 const val=(f,n)=>f.elements[n]?f.elements[n].value.trim():'';
 const num=(f,n)=>parseFloat(f.elements[n]?.value)||0;
+const ATRIBUTOS_SENSORIAIS=['aroma','sabor','acidez','corpo','fin'];
+/* preenche o formulário de qualidade com o que o lote já tem (vazio onde não há), para que o que não for
+   digitado não pareça ser apagado ao salvar */
+function preencheQualidade(f,lt){
+  ['cobTipo','cobBebida','scaa','peneira','peneiraPct',...ATRIBUTOS_SENSORIAIS,'descritores'].forEach(n=>{
+    if(!f.elements[n])return;
+    const v=ATRIBUTOS_SENSORIAIS.includes(n)?lt?.sens?.[n]:lt?.[n];
+    f.elements[n].value=temValor(v)?String(v):'';
+  });
+}
 $main.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.target;atualizaHoje();
   if(loadError)return;
@@ -3016,11 +3028,14 @@ $main.addEventListener('submit',async e=>{
   }
   else if(f.id==='f-qual'){
     const lt=db.lotes.find(x=>x.id===val(f,'loteId'));
-    if(lt){lt.cobTipo=num(f,'cobTipo');lt.cobBebida=val(f,'cobBebida');lt.scaa=num(f,'scaa');
-      lt.peneira=val(f,'peneira');lt.peneiraPct=num(f,'peneiraPct');
-      const s={aroma:num(f,'aroma'),sabor:num(f,'sabor'),acidez:num(f,'acidez'),corpo:num(f,'corpo'),fin:num(f,'fin')};
-      if(Object.values(s).some(v=>v>0))lt.sens=s;
-      lt.descritores=val(f,'descritores');}
+    if(lt){
+      /* campo em branco mantém o que já está no lote; só o que foi preenchido substitui (0 digitado vale) */
+      const dado=n=>val(f,n)!=='';
+      ['cobTipo','scaa','peneiraPct'].forEach(n=>{if(dado(n))lt[n]=num(f,n);});
+      ['cobBebida','peneira','descritores'].forEach(n=>{if(dado(n))lt[n]=val(f,n);});
+      const attrs=ATRIBUTOS_SENSORIAIS.filter(dado);
+      if(attrs.length)lt.sens={aroma:0,sabor:0,acidez:0,corpo:0,fin:0,...lt.sens,...Object.fromEntries(attrs.map(n=>[n,num(f,n)]))};
+    }
   }
   else if(f.id==='f-vcafe'){
     const v={id:uid(),data:val(f,'data'),loteId:val(f,'loteId'),sacas:num(f,'sacas'),preco:num(f,'preco'),

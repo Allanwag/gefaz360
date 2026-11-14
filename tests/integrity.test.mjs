@@ -29,7 +29,8 @@ function setup(initial=null){
     for(const el of elements)elements[el.name]=el;
     return events['main:submit']({preventDefault(){},target:{id,elements,dataset:editId?{editId}:{},hasAttribute:()=>false}});
   };
-  return {run,click,submit,storage,files,elements,intervals};
+  const change=async target=>events['main:change']({target});
+  return {run,click,submit,change,storage,files,elements,intervals};
 }
 function importFixture(){
   const a=setup();
@@ -465,4 +466,36 @@ test('excluir aplicação concluída pode ser desfeito e restaura estoque, custo
   assert.equal(a.run(`db.pulvOS.find(o=>o.id==='${id}').status`),'concluida');
   assert.equal(a.run('estoque()'),concluido);assert.equal(a.run('db.fin.length'),nFin);
   assert.equal(a.run(`db.fin.some(f=>f.pulvOSId==='${id}')`),true);
+});
+test('salvar parte da qualidade preserva os campos deixados em branco',async()=>{
+  const a=setup();const id=a.run('db.lotes[0].id');
+  await a.submit('f-qual',{loteId:id,cobTipo:'',cobBebida:'',scaa:'',peneira:'16',peneiraPct:'',aroma:'',sabor:'9',acidez:'',corpo:'',fin:'',descritores:''});
+  assert.deepEqual(JSON.parse(a.run('JSON.stringify(db.lotes[0])')),{...JSON.parse(a.run('JSON.stringify(db.lotes[0])')),
+    scaa:82.5,cobTipo:4,cobBebida:'Dura',peneira:'16',peneiraPct:82,descritores:'Chocolate, caramelo, nozes',
+    sens:{aroma:8,sabor:9,acidez:7.5,corpo:8,fin:7.5}});
+});
+test('zero digitado na qualidade é gravado',async()=>{
+  const a=setup();const id=a.run('db.lotes[0].id');
+  await a.submit('f-qual',{loteId:id,scaa:'0'});
+  assert.equal(a.run('db.lotes[0].scaa'),0);assert.equal(a.run('db.lotes[0].cobTipo'),4);
+});
+test('qualidade de lote sem perfil sensorial cria sens completo só se algo foi preenchido',async()=>{
+  const a=setup();const id=a.run('db.lotes[1].id');
+  await a.submit('f-qual',{loteId:id,scaa:'80',descritores:'cítrico'});
+  assert.equal(a.run('db.lotes[1].sens'),undefined);assert.equal(a.run('db.lotes[1].scaa'),80);
+  await a.submit('f-qual',{loteId:id,sabor:'8'});
+  assert.deepEqual(JSON.parse(a.run('JSON.stringify(db.lotes[1].sens)')),{aroma:0,sabor:8,acidez:0,corpo:0,fin:0});
+  assert.equal(a.run('db.lotes[1].descritores'),'cítrico');
+  a.run("normalizeDatabase(JSON.parse(JSON.stringify(db)),{strict:true})");
+});
+test('trocar o lote no formulário de qualidade preenche os campos com o que já está gravado',async()=>{
+  const a=setup();const id0=a.run('db.lotes[0].id'),id1=a.run('db.lotes[1].id');
+  a.run(`globalThis.fq={elements:{}};for(const n of ['loteId','cobTipo','cobBebida','scaa','peneira','peneiraPct','aroma','sabor','acidez','corpo','fin','descritores'])fq.elements[n]={name:n,value:'sobra'};`);
+  const alvo=id=>({name:'loteId',value:id,closest:sel=>sel==='#f-qual'?a.run('fq'):null});
+  await a.change(alvo(id0));
+  assert.equal(a.run('fq.elements.scaa.value'),'82.5');assert.equal(a.run('fq.elements.cobBebida.value'),'Dura');
+  assert.equal(a.run('fq.elements.sabor.value'),'7.75');assert.equal(a.run('fq.elements.descritores.value'),'Chocolate, caramelo, nozes');
+  assert.equal(a.run('fq.elements.loteId.value'),'sobra');
+  await a.change(alvo(id1));
+  for(const n of ['cobTipo','cobBebida','scaa','peneira','peneiraPct','aroma','sabor','acidez','corpo','fin','descritores'])assert.equal(a.run(`fq.elements.${n}.value`),'',n);
 });
