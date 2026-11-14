@@ -2783,17 +2783,15 @@ function validateForm(f){
     if(Number.isFinite(last)&&num(f,'h')<=last)add('h',`A nova leitura deve ocorrer depois de ${N(last)} hora(s).`);
   }
   if(f.id==='f-abast'){
-    const maqId=val(f,'maqId'),m=db.maquinas.find(x=>x.id===maqId),h=num(f,'horimetro');
-    if(f.dataset.editId){
-      /* edição de abastecimento antigo: o horímetro atual da máquina já inclui os posteriores,
-         então o limite é o dos vizinhos da mesma máquina, não o atual */
-      const outros=db.abastecimentos.filter(x=>x.id!==f.dataset.editId&&x.maqId===maqId),d=val(f,'data');
-      const antes=Math.max(0,...outros.filter(x=>x.data<d).map(x=>Number(x.horimetro)||0));
-      const depois=Math.min(Infinity,...outros.filter(x=>x.data>d).map(x=>Number(x.horimetro)||0));
-      if(h<antes)add('horimetro',`O horímetro não pode ser menor que ${N(antes)} h, registrado num abastecimento anterior.`);
-      else if(h>depois)add('horimetro',`O horímetro não pode passar de ${N(depois)} h, registrado num abastecimento posterior.`);
-    }
-    else if(m&&h<Number(m.horimetro||0))add('horimetro',`O horímetro não pode ser menor que o atual (${N(m.horimetro)} h).`);
+    const maqId=val(f,'maqId'),h=num(f,'horimetro');
+    /* inclusão ou edição: o limite é o dos vizinhos por data da mesma máquina. O horímetro atual da máquina
+       já inclui os abastecimentos posteriores, então não serve de limite — senão um abastecimento
+       esquecido, com data antiga e valor coerente, seria recusado */
+    const outros=db.abastecimentos.filter(x=>x.id!==f.dataset.editId&&x.maqId===maqId),d=val(f,'data');
+    const antes=Math.max(0,...outros.filter(x=>x.data<d).map(x=>Number(x.horimetro)||0));
+    const depois=Math.min(Infinity,...outros.filter(x=>x.data>d).map(x=>Number(x.horimetro)||0));
+    if(h<antes)add('horimetro',`O horímetro não pode ser menor que ${N(antes)} h, registrado num abastecimento anterior.`);
+    else if(h>depois)add('horimetro',`O horímetro não pode passar de ${N(depois)} h, registrado num abastecimento posterior.`);
   }
   if((f.id==='f-os'||f.id==='f-os-operacional')&&val(f,'prazo')<val(f,'data'))
     add('prazo','O prazo não pode ser anterior ao início planejado.');
@@ -2953,6 +2951,14 @@ function preencheQualidade(f,lt){
     f.elements[n].value=temValor(v)?String(v):'';
   });
 }
+/* depois de corrigir ou excluir um abastecimento: se o horímetro da máquina era justamente o desse registro
+   (digitado errado, por exemplo), ele passa a ser o maior entre os abastecimentos que restam; se a máquina
+   foi ajustada à mão para outro valor, ou não restou abastecimento, não mexe */
+function recalcHorimetro(maqId,horimetroAnterior){
+  const m=db.maquinas.find(x=>x.id===maqId);if(!m||Number(m.horimetro)!==Number(horimetroAnterior))return;
+  const restantes=db.abastecimentos.filter(x=>x.maqId===maqId);if(!restantes.length)return;
+  m.horimetro=Math.max(...restantes.map(x=>Number(x.horimetro)||0));
+}
 $main.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.target;atualizaHoje();
   if(loadError)return;
@@ -2961,6 +2967,8 @@ $main.addEventListener('submit',async e=>{
   if(!validateForm(f))return;
   if(f.id==='f-doc'){await docUpload(f);return;}
   const editingCol=FORM_COL[f.id],editingRec=editingCol&&f.dataset.editId?db[editingCol].find(x=>x.id===f.dataset.editId):null;
+  /* o registro editado é alterado no lugar mais abaixo: guarda o que ele era antes (máquina e horímetro) */
+  const abastAntes=f.id==='f-abast'&&editingRec?{maqId:editingRec.maqId,horimetro:editingRec.horimetro}:null;
   if(editingCol==='medicoes'&&(editingRec?.acertada||editingRec?.consolidada)){
     showFormError(f,[{field:'medidas',message:'Medições acertadas ou consolidadas não podem ser alteradas.'}]);return;
   }
@@ -3119,6 +3127,8 @@ $main.addEventListener('submit',async e=>{
         if(t){const data=t.data;Object.assign(t,finCarga(rec));t.data=data;t.status=rec.pago?'realizado':'previsto';}}}
     else if(novo)db[colE].push(novo);
     delete f.dataset.editId;
+    /* a máquina nova já foi levantada pelo envio; a antiga (ou a mesma, se o valor baixou) é recalculada */
+    if(abastAntes)recalcHorimetro(abastAntes.maqId,abastAntes.horimetro);
   }
   const saved=save();render();
   showStatus(saved?(wasEditing?'Registro atualizado.':'Registro salvo.'):'O registro está apenas na memória: o navegador recusou a gravação.',{undo:saved});
@@ -3255,6 +3265,7 @@ $main.addEventListener('click',async e=>{
     if(col==='vendasCafe')db.fin=db.fin.filter(fx=>fx.vendaId!==id);
     if(col==='cargas')db.fin=db.fin.filter(fx=>fx.cargaId!==id);
     if(concluida)estornaAplicacao(alvo);
+    if(col==='abastecimentos')recalcHorimetro(alvo.maqId,alvo.horimetro);
     if(col==='os'&&osSelecionada===id)osSelecionada='';
     changed=true;statusMessage='Registro excluído.';
   }

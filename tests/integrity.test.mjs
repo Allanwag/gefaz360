@@ -181,7 +181,7 @@ test('abastecimento antigo pode ser corrigido, respeitando os vizinhos da mesma 
   await a.submit('f-abast',{data:'2026-06-20',maqId:'mq',litros:185,horimetro:4200,obs:''},'a1');
   assert.match(a.run('errors[0].message'),/4\.195 h/);assert.equal(a.run('db.abastecimentos.find(x=>x.id==="a1").horimetro'),4150);
   a.run('globalThis.errors=null');await a.submit('f-abast',{data:'2026-07-20',maqId:'mq',litros:100,horimetro:4100,obs:''});
-  assert.match(a.run('errors[0].message'),/menor que o atual/);assert.equal(a.run('db.abastecimentos.length'),3);
+  assert.match(a.run('errors[0].message'),/menor que 4\.210 h, registrado num abastecimento anterior/);assert.equal(a.run('db.abastecimentos.length'),3);
 });
 
 test('lançar por texto lê números no padrão brasileiro e não confunde máquinas',()=>{
@@ -517,4 +517,30 @@ test('lote pode ser excluído se os outros lotes ainda cobrem as vendas sem lote
   await a.click('del','lotes','l1');assert.equal(a.run('db.lotes.length'),1);
   assert.match(a.run("deleteBlock('lotes','l2')"),/vendas de café sem lote/);
   a.run("normalizeDatabase(JSON.parse(JSON.stringify(db)),{strict:true})");
+});
+test('abastecimento esquecido entra se o horímetro é coerente com os vizinhos',async()=>{
+  const a=setup();const m=a.run('db.maquinas[0].id'),n=a.run('db.abastecimentos.length');
+  await a.submit('f-abast',{data:'2026-07-01',maqId:m,litros:100,horimetro:4170,obs:''});
+  assert.equal(a.run('db.abastecimentos.length'),n+1);assert.equal(a.run('db.maquinas[0].horimetro'),4210);
+  await a.submit('f-abast',{data:'2026-07-02',maqId:m,litros:100,horimetro:4100,obs:''});
+  assert.equal(a.run('db.abastecimentos.length'),n+1);
+});
+test('corrigir ou excluir abastecimento corrige o horímetro da máquina',async()=>{
+  const a=setup();const m=a.run('db.maquinas[0].id'),m2=a.run('db.maquinas[1].id');
+  await a.submit('f-abast',{data:'2026-07-20',maqId:m,litros:100,horimetro:42300,obs:''});
+  const rid=a.run('db.abastecimentos.at(-1).id');assert.equal(a.run('db.maquinas[0].horimetro'),42300);
+  await a.submit('f-abast',{data:'2026-07-20',maqId:m,litros:100,horimetro:4230,obs:''},rid);
+  assert.equal(a.run('db.maquinas[0].horimetro'),4230);
+  await a.submit('f-abast',{data:'2026-07-20',maqId:m2,litros:100,horimetro:1190,obs:''},rid);
+  assert.equal(a.run('db.maquinas[0].horimetro'),4210);assert.equal(a.run('db.maquinas[1].horimetro'),1190);
+  await a.click('del','abastecimentos',rid);
+  assert.equal(a.run('db.maquinas[1].horimetro'),1185);
+});
+test('recalcHorimetro só mexe quando o horímetro da máquina veio do registro removido',()=>{
+  const a=setup();
+  a.run(`db.maquinas=[{id:'mq',nome:'T',horimetro:5000,proxRev:0}];db.abastecimentos=[{id:'a1',data:'2026-07-01',maqId:'mq',litros:1,horimetro:4100,obs:''}]`);
+  a.run("recalcHorimetro('mq',4300)");assert.equal(a.run('db.maquinas[0].horimetro'),5000);
+  a.run("recalcHorimetro('mq',5000)");assert.equal(a.run('db.maquinas[0].horimetro'),4100);
+  a.run("db.abastecimentos=[];db.maquinas[0].horimetro=4100;recalcHorimetro('mq',4100)");assert.equal(a.run('db.maquinas[0].horimetro'),4100);
+  a.run("recalcHorimetro('nao-existe',1)");
 });
