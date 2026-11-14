@@ -8,6 +8,8 @@ const DB_ARRAYS=['talhoes','cafe','cargas','fin','func','apont','maquinas','os',
   'combCompras','abastecimentos','lembretes','vendasCafe','chuvas','leiturasDT','solos','adubacoes',
   'podas','arruacoes','capinas','documentos','geoTalhoes','mip','bienal'];
 const CORE_ARRAYS=['talhoes','cafe','cargas','fin','func','apont','maquinas','os','estoque'];
+/* coleções cujos registros não têm um campo "data" próprio */
+const COLECOES_SEM_DATA=new Set(['talhoes','func','maquinas','estoque','defensivos','receitas','lembretes','geoTalhoes','bienal','secagens']);
 const uid=()=>globalThis.crypto?.randomUUID?.()||Math.random().toString(36).slice(2)+Date.now().toString(36);
 
 /* GitHub Pages não permite X-Frame-Options customizado. Este bloqueio complementa a CSP e
@@ -400,7 +402,12 @@ function normalizeDatabase(raw,{strict=false}={}){
     if(value!==undefined&&!Array.isArray(value))throw new Error(`A coleção ${k} precisa ser uma lista.`);
     next[k]=(value||[]).map((item,i)=>{
       if(!item||typeof item!=='object'||Array.isArray(item))throw new Error(`Registro inválido em ${k}, posição ${i+1}.`);
-      return {...item};
+      const rec={...item};
+      /* registro antigo ou importado sem data vira texto vazio (nos dois modos, sem rejeitar): as telas fazem
+         startsWith e new Date nesse campo, e um undefined derrubava a página inteira */
+      if(!COLECOES_SEM_DATA.has(k))rec.data=String(rec.data??'');
+      if(k==='secagens')rec.dataInicio=String(rec.dataInicio??'');
+      return rec;
     });
   });
   const positiveParams=['litrosPorSaca','litrosPorMedida','litrosPorCarreta','minDiesel','diariaMinima'];
@@ -578,7 +585,8 @@ const ROTAS=[
 const NOMES_CULT={cafe:'Café',milho:'Milho',soja:'Soja',sorgo:'Sorgo',trigo:'Trigo',cobertura:'Cobertura'};
 const CORES_CULT={milho:'var(--milho)',soja:'var(--soja)',sorgo:'var(--sorgo)',trigo:'var(--trigo)'};
 const rotaValida=id=>ROTAS.some(r=>r[0]===id);
-const rotaHash=()=>{const id=decodeURIComponent(location.hash.slice(1));return rotaValida(id)?id:'dash';};
+/* endereço com hash malformado (ex.: #%) não pode impedir o app de abrir */
+const rotaHash=()=>{let id='';try{id=decodeURIComponent(location.hash.slice(1));}catch(e){}return rotaValida(id)?id:'dash';};
 let rota=rotaHash();
 let osFiltro='ativas',osSelecionada='';
 
@@ -684,6 +692,7 @@ function pgOrdens(){
 function semanasCafe(){
   const m=new Map();
   F(db.cafe).forEach(r=>{
+    if(!ISO_DIA.test(String(r.data||'')))return;  /* colheita sem data não entra no gráfico por semana */
     const dt=new Date(r.data+'T12:00:00');
     const mon=new Date(dt);mon.setDate(dt.getDate()-((dt.getDay()+6)%7));
     const k=mon.toISOString().slice(0,10);
@@ -2650,6 +2659,17 @@ const PAGES={dash:pgDash,ordens:pgOrdens,cafe:pgCafe,pos:pgPos,milho:()=>pgGrao(
 
 /* ============ render & eventos ============ */
 const $nav=document.getElementById('nav'),$main=document.getElementById('main');
+/* rota da última tela desenhada: ação na mesma tela mantém a rolagem; trocar de tela volta ao topo */
+let rotaDesenhada='';
+const rolagemAposRender=(rotaAnterior,rotaAtual,y)=>rotaAnterior===rotaAtual?(Number(y)||0):0;
+/* uma página que lança erro não pode congelar a tela: mostra o aviso e oferece o backup */
+function paginaHTML(id){
+  try{return PAGES[id]();}
+  catch(err){
+    if(typeof console!=='undefined')console.error(err);
+    return `<h1>Esta tela encontrou um erro</h1><div class="panel" style="border-color:var(--crit)"><p>Os dados não foram alterados. Exporte um backup e avise o suporte informando a mensagem abaixo.</p><p class="sub">${esc(err&&err.message||String(err))}</p><button class="btn" data-action="export">Exportar backup completo</button></div>`;
+  }
+}
 /* colunas editáveis → formulário correspondente na página */
 const EDIT_FORM={cafe:'f-cafe',cargas:'f-carga',fin:'f-fin',func:'f-func',apont:'f-apont',
   maquinas:'f-maq',os:'f-os',estoque:'f-item',talhoes:'f-talhao',medicoes:'f-med',
@@ -2808,6 +2828,7 @@ function validateForm(f){
 }
 
 function render(){
+  const yAntes=window.scrollY;
   atualizaHoje();
   if(loadError){
     $nav.innerHTML='';document.getElementById('safraBox').innerHTML='';
@@ -2830,7 +2851,7 @@ function render(){
   }).join('');
   /* mantém o módulo ativo visível na barra lateral rolável */
   $nav.querySelector('button.on')?.scrollIntoView({block:'nearest',inline:'nearest'});
-  $main.innerHTML=(saveErro?`<div class="panel" style="border-color:var(--crit)"><p style="margin:0;color:var(--crit);font-weight:700">⚠️ Os dados NÃO estão sendo gravados neste navegador (armazenamento cheio ou bloqueado). Vá em Cadastros &amp; Dados e exporte o backup JSON agora, antes de fechar esta aba.</p></div>`:'')+PAGES[rota]();
+  $main.innerHTML=(saveErro?`<div class="panel" style="border-color:var(--crit)"><p style="margin:0;color:var(--crit);font-weight:700">⚠️ Os dados NÃO estão sendo gravados neste navegador (armazenamento cheio ou bloqueado). Vá em Cadastros &amp; Dados e exporte o backup JSON agora, antes de fechar esta aba.</p></div>`:'')+paginaHTML(rota);
   /* safras disponíveis: das que têm lançamento (ou 2018) até a que começa no ano que vem */
   const ys=[...db.cafe,...db.cargas,...db.fin,...db.lotes].map(r=>+String(r.data||'').slice(0,4)).filter(x=>x>2000);
   const curY=+hoje.slice(0,4);
@@ -2853,7 +2874,7 @@ function render(){
     x.parentNode.insertBefore(e,x);
   });
   applyFormEnhancements();
-  window.scrollTo(0,0);
+  window.scrollTo(0,rolagemAposRender(rotaDesenhada,rota,yAntes));rotaDesenhada=rota;
   const imp=document.getElementById('imp');
   if(imp)imp.onchange=async e=>{
     const f=e.target.files[0];if(!f)return;

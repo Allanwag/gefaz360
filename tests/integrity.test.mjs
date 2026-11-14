@@ -5,14 +5,14 @@ import test from 'node:test';
 
 const source=fs.readFileSync(new URL('../app.js',import.meta.url),'utf8');
 // Executa os handlers reais; somente APIs do navegador e renderização são simuladas.
-function setup(initial=null){
+function setup(initial=null,hash='#dash'){
   const events={},storage=new Map(initial===null?[]:[['pvgest-erp-v1',initial]]),files=new Map();
   const elements=new Map(),intervals=[];
   const window={addEventListener(){},scrollY:0,scrollTo(){}};window.top=window;window.self=window;
   const context=vm.createContext({window,document:{getElementById(id){
     if(!elements.has(id))elements.set(id,{addEventListener:(type,fn)=>events[id+':'+type]=fn,style:{}});
     return elements.get(id);
-  },addEventListener(){}},location:{hash:'#dash'},localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)},
+  },addEventListener(){}},location:{hash},localStorage:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)},
   Blob,atob,Uint8Array,setTimeout,clearTimeout,confirm:()=>true,files,navigator:{},
   // intervalos ficam registrados sem rodar: os testes os disparam à mão (e o processo não fica preso)
   setInterval:fn=>intervals.push(fn)});
@@ -543,4 +543,41 @@ test('recalcHorimetro só mexe quando o horímetro da máquina veio do registro 
   a.run("recalcHorimetro('mq',5000)");assert.equal(a.run('db.maquinas[0].horimetro'),4100);
   a.run("db.abastecimentos=[];db.maquinas[0].horimetro=4100;recalcHorimetro('mq',4100)");assert.equal(a.run('db.maquinas[0].horimetro'),4100);
   a.run("recalcHorimetro('nao-existe',1)");
+});
+test('ação na mesma tela mantém a rolagem; trocar de tela volta ao topo',()=>{
+  const a=setup();
+  assert.equal(a.run("rolagemAposRender('oficina','oficina',3939)"),3939);
+  assert.equal(a.run("rolagemAposRender('oficina','fin',3939)"),0);
+});
+test('registro sem data não derruba as telas e continua válido',()=>{
+  const a=setup();
+  a.run(`const cru=JSON.parse(JSON.stringify(db));
+    cru.fin.push({id:'x1',tipo:'saida',valor:1,status:'realizado',categoria:'a',centro:'Adm',desc:'sem data'});
+    cru.cafe.push({id:'x2',talhaoId:'c1',litros:1,tipo:'Varrição'});
+    cru.pulvOS.push({id:'x3',talhaoId:'c1',receitaId:cru.receitas[0].id,area:1,status:'concluida'});
+    db=normalizeDatabase(cru,{strict:true});anoFiltro='';`);
+  assert.equal(a.run("db.fin.find(f=>f.id==='x1').data"),'');
+  for(const p of ['pgDash()','pgCafe()','pgFin()','pgPvgest()','statusCarencia("c1")'])a.run(p);
+});
+test('erro numa página vira aviso com exportação de backup, não tela congelada',()=>{
+  const a=setup();a.run("PAGES.dash=()=>{throw new Error('falha de teste')}");
+  const html=a.run("paginaHTML('dash')");
+  assert.match(html,/Esta tela encontrou um erro/);assert.match(html,/falha de teste/);assert.match(html,/data-action="export"/);
+});
+test('hash malformado abre a visão geral',()=>{
+  const a=setup(null,'#%');assert.equal(a.run('rota'),'dash');
+});
+test('data e dataInicio ausentes viram texto vazio nos dois modos, sem mexer no que existe',()=>{
+  const a=setup();
+  a.run(`const cru=JSON.parse(JSON.stringify(db));
+    cru.chuvas.push({id:'x9',mm:5});
+    cru.secagens.push({id:'x8',loteId:cru.lotes[0].id,umidadeEntrada:30,status:'andamento',leituras:[{h:0,u:30}]});
+    globalThis.lax=normalizeDatabase(JSON.parse(JSON.stringify(cru)));
+    globalThis.estrito=normalizeDatabase(JSON.parse(JSON.stringify(cru)),{strict:true});`);
+  for(const v of ['lax','estrito']){
+    assert.equal(a.run(`${v}.chuvas.find(x=>x.id==='x9').data`),'');
+    assert.equal(a.run(`${v}.secagens.find(x=>x.id==='x8').dataInicio`),'');
+    assert.equal(a.run(`${v}.fin[0].data`),a.run('db.fin[0].data'));
+    assert.equal(a.run(`'data' in ${v}.talhoes[0]`),false);
+  }
 });

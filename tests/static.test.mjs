@@ -102,3 +102,8 @@ test('mutações críticas mantêm confirmação, recuperação e vínculos',()=
   assert.match(js,/missingFileIds/);
   assert.match(js,/validateDatabaseIntegrity/);
 });
+test('render usa rolagemAposRender e paginaHTML, não rola sempre ao topo nem chama a página sem proteção',()=>{
+  assert.match(js,/window\.scrollTo\(0,rolagemAposRender\(rotaDesenhada,rota,/);
+  assert.match(js,/\+paginaHTML\(rota\)/);
+  assert.doesNotMatch(js,/window\.scrollTo\(0,0\)/);assert.doesNotMatch(js,/PAGES\[rota\]\(\)/);
+});
