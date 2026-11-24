@@ -799,6 +799,18 @@ test('Beneficiar preenche as sacas atuais do lote selecionado e recusa lote que 
   assert.equal(a.run('globalThis.errors[0].field'),'loteId');
   assert.equal(a.run('globalThis.errors[0].message'),'Este lote ainda não está seco. Conclua a secagem antes de beneficiar.');
 });
+test('mensagens de saldo de sacas mostram a fração em vez de arredondar',async()=>{
+  const a=setup();const id=a.run('db.lotes[0].id');
+  a.run("db.vendasCafe[0].sacas=30.4");
+  await a.submit('f-benef',{loteId:id,sacas:30});
+  assert.equal(a.run('globalThis.errors[0].message'),'Este lote já tem 30,4 saca(s) vendidas.');
+  await a.submit('f-vcafe',{data:'2026-09-07',loteId:id,sacas:16,preco:1000});
+  assert.equal(a.run('globalThis.errors[0].message'),'Este lote tem apenas 15,6 saca(s) disponíveis.');
+  /* inteiros continuam sem casas decimais */
+  a.run("db.vendasCafe[0].sacas=30");
+  await a.submit('f-benef',{loteId:id,sacas:29});
+  assert.equal(a.run('globalThis.errors[0].message'),'Este lote já tem 30 saca(s) vendidas.');
+});
 test('lote seco continua sendo beneficiado e aparece sem contagem de sacas no seletor',async()=>{
   const a=setup();a.run("db.lotes[1].status='seco'");const id=a.run('db.lotes[1].id');
   const html=a.run('pgPos()');

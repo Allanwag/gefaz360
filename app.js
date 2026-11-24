@@ -466,6 +466,8 @@ const save=(value=db,{recover=false}={})=>{try{
 const BRL=v=>(Number(v)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',minimumFractionDigits:0,maximumFractionDigits:0});
 const BRL2=v=>(Number(v)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const N=(v,d=0)=>(Number(v)||0).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});
+/* quantidade de sacas em mensagem: inteiro sem casas, fração (até 2 casas) quando existe — nunca arredonda 30,4 para 30 */
+const NSacas=v=>(Number(v)||0).toLocaleString('pt-BR',{maximumFractionDigits:2});
 /* só datas AAAA-MM-DD (com ou sem hora) viram dd/mm; o resto vira "—" em vez de ir cru para o HTML */
 const ISO_DIA=/^(\d{4})-(\d{2})-(\d{2})/;
 const dBR=s=>{const m=ISO_DIA.exec(String(s||''));return m?m[3]+'/'+m[2]:'—';};
@@ -2834,12 +2836,12 @@ function validateForm(f){
     const vendido=db.vendasCafe.reduce((s,v)=>s+(Number(v.sacas)||0),0);
     const lt=db.lotes.find(l=>l.id===loteId);
     if(lt&&lt.status!=='seco'&&lt.status!=='beneficiado')add('loteId','Este lote ainda não está seco. Conclua a secagem antes de beneficiar.');
-    else if(sacas<doLote-0.001)add('sacas',`Este lote já tem ${N(doLote,0)} saca(s) vendidas.`);
+    else if(sacas<doLote-0.001)add('sacas',`Este lote já tem ${NSacas(doLote)} saca(s) vendidas.`);
     else if(outros+sacas<vendido-0.001)add('sacas','As vendas de café já registradas excedem esse total.');
   }
   if(f.id==='f-vcafe'){
     const loteId=val(f,'loteId'),sacas=num(f,'sacas'),total=estoqueCafeDisponivel(),disponivel=loteId?Math.min(sacasDisponiveis(loteId),total):total;
-    if(sacas>disponivel+0.001)add('sacas',loteId?`Este lote tem apenas ${N(disponivel,0)} saca(s) disponíveis.`:`O estoque total tem apenas ${N(disponivel,0)} saca(s) disponíveis.`);
+    if(sacas>disponivel+0.001)add('sacas',loteId?`Este lote tem apenas ${NSacas(disponivel)} saca(s) disponíveis.`:`O estoque total tem apenas ${NSacas(disponivel)} saca(s) disponíveis.`);
   }
   if(f.elements.area&&f.elements.talhaoId){
     const t=db.talhoes.find(x=>x.id===val(f,'talhaoId')),area=num(f,'area');
