@@ -2780,10 +2780,13 @@ function importaPvgest(d,base){
       /* o PVgest não guarda carência: fica "não informada", nunca zero */
       carencia:null,reentrada:null});
   });
+  /* receita sem nenhum produto aproveitável não é importada (o formulário também não a salva) e é contada */
+  let semProduto=0;
   receitas.forEach(r=>{
+    const itens=(r.itens||[]).filter(i=>idMap[i.produto]).map(i=>({prodId:idMap[i.produto],dose:+i.dose||0}));
+    if(!itens.length){semProduto++;return;}
     novo.receitas.push({id:uid(),nome:r.nome||'Receita',cultura:r.cultura||'',alvo:r.alvo||'',
-      volumeHa:+r.volume_ha||200,
-      itens:(r.itens||[]).filter(i=>idMap[i.produto]).map(i=>({prodId:idMap[i.produto],dose:+i.dose||0}))});
+      volumeHa:+r.volume_ha||200,itens});
   });
   let novos=0;
   talhoes.forEach(t=>{
@@ -2793,7 +2796,7 @@ function importaPvgest(d,base){
       cultura:(CULTURAS_PVGEST.find(([trecho])=>c.includes(trecho))||[0,'cobertura'])[1]});
     novos++;
   });
-  return {db:novo,produtos:produtos.length,receitas:receitas.length,talhoes:novos};
+  return {db:novo,produtos:produtos.length,receitas:receitas.length-semProduto,semProduto,talhoes:novos};
 }
 function validateForm(f){
   clearFormError(f);const errors=[],add=(field,message)=>{if(!errors.some(x=>x.field===field&&x.message===message))errors.push({field,message});};
@@ -2952,7 +2955,7 @@ function render(){
       db=resultado.db;
       save();render();
       const m2=document.getElementById('imp-pv-msg');
-      if(m2)m2.textContent='Importado: '+resultado.produtos+' produtos, '+resultado.receitas+' receitas, '+resultado.talhoes+' talhões novos.';
+      if(m2)m2.textContent='Importado: '+resultado.produtos+' produtos, '+resultado.receitas+' receitas, '+resultado.talhoes+' talhões novos.'+(resultado.semProduto?' '+resultado.semProduto+' receita(s) sem produto foram ignoradas.':'');
       showStatus('Dados do PVgest importados.',{undo:true});
     }catch(err){if(m)m.textContent='Arquivo inválido: cole o conteúdo de localStorage.getItem(\'pvgest_v1\') num .json.';}
   };

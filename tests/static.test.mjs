@@ -111,4 +111,5 @@ test('colunas de row2 podem encolher',()=>assert.match(css,/\.row2>\*\{min-width
 test('importação do PVgest valida na cópia antes do ponto de desfazer e só então troca o banco',()=>{
   assert.match(js,/importaPvgest\(d,db\);\s*await beginUndo\('Importação do PVgest'\);\s*db=resultado\.db;/);
   assert.match(js,/const resultado=importaPvgest\(d,db\)/);
+  assert.match(js,/receita\(s\) sem produto/);
 });

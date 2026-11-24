@@ -661,6 +661,15 @@ test('importação do PVgest trabalha numa cópia, liga receita aos produtos nov
   assert.deepEqual(JSON.parse(a.run("JSON.stringify(r.db.talhoes.slice(-2).map(t=>[t.nome,t.cultura]))")),[['Nova Gleba','soja'],['Chapa','cobertura']]);
   assert.equal(a.run('r.db.talhoes.length'),a.run('db.talhoes.length')+2);
 });
+test('importação do PVgest ignora receita sem nenhum produto aproveitável e conta as ignoradas',()=>{
+  const a=setup();const n=a.run('db.receitas.length');
+  a.run(`globalThis.r=importaPvgest({produtos:[{id:7,nome:'Calda X'}],receitas:[
+    {nome:'Boa',itens:[{produto:7,dose:2}]},{nome:'Só inexistente',itens:[{produto:99,dose:1}]},{nome:'Vazia',itens:[]},{nome:'Sem lista'}]},db)`);
+  assert.equal(a.run('r.receitas'),1);assert.equal(a.run('r.semProduto'),3);
+  assert.equal(a.run('r.db.receitas.length'),n+1);assert.equal(a.run('r.db.receitas.at(-1).nome'),'Boa');
+  assert.equal(a.run('r.db.receitas.every(x=>x.itens.length>0)'),true);
+  assert.equal(a.run('importaPvgest({talhoes:[]},db).semProduto'),0);
+});
 test('o banco resultante da importação do PVgest passa na validação estrita',()=>{
   const a=setup();
   a.run(`globalThis.r=importaPvgest({
