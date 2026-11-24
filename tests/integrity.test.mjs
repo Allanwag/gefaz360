@@ -30,7 +30,8 @@ function setup(initial=null,hash='#dash'){
     return events['main:submit']({preventDefault(){},target:{id,elements,dataset:editId?{editId}:{},hasAttribute:()=>false}});
   };
   const change=async target=>events['main:change']({target});
-  return {run,click,submit,change,storage,files,elements,intervals};
+  const nav=async rota=>events['nav:click']({target:{closest:()=>({dataset:{rota}})}});
+  return {run,click,submit,change,nav,storage,files,elements,intervals};
 }
 function importFixture(){
   const a=setup();
@@ -762,6 +763,14 @@ test('abastecimentos da mesma máquina no mesmo dia respeitam a ordem de lançam
   a.run("db.maquinas.push({id:'mq2',nome:'U',horimetro:100,proxRev:0})");
   await a.submit('f-abast',{data:'2026-07-20',maqId:'mq2',litros:5,horimetro:90,obs:''});
   assert.equal(a.run("db.abastecimentos.filter(x=>x.maqId==='mq2').length"),1);
+});
+test('clicar no item de menu da tela atual volta ao topo, e as ações na tela continuam mantendo a rolagem',async()=>{
+  const a=setup(null,'#cafe');a.elements.get('main').focus=()=>{};
+  a.run("rotaDesenhada='cafe'");
+  assert.equal(a.run('rolagemAposRender(rotaDesenhada,rota,500)'),500);
+  await a.nav('cafe');
+  assert.equal(a.run('rolagemAposRender(rotaDesenhada,rota,500)'),0);
+  assert.equal(a.run('rota'),'cafe');
 });
 test('lote seco continua sendo beneficiado e aparece sem contagem de sacas no seletor',async()=>{
   const a=setup();a.run("db.lotes[1].status='seco'");const id=a.run('db.lotes[1].id');

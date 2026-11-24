@@ -2958,7 +2958,8 @@ function render(){
 }
 $nav.addEventListener('click',e=>{const b=e.target.closest('[data-rota]');if(!b)return;
   const next=b.dataset.rota;if(!rotaValida(next))return;
-  if(location.hash.slice(1)===next){rota=next;render();$main.focus();}
+  /* clicar no item da tela em que já está recarrega a tela do topo (ações dentro da tela mantêm a rolagem) */
+  if(location.hash.slice(1)===next){rota=next;rotaDesenhada='';render();$main.focus();}
   else location.hash=next;
 });
 window.addEventListener('hashchange',()=>{rota=rotaHash();render();$main.focus();});
