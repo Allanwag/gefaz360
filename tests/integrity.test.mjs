@@ -740,6 +740,29 @@ test('excluir o único abastecimento avisa que o horímetro da máquina continua
   await a.click('del','abastecimentos',a.run('db.abastecimentos.at(-1).id'));
   assert.equal(a.run('status'),'Registro excluído.');
 });
+test('abastecimentos da mesma máquina no mesmo dia respeitam a ordem de lançamento',async()=>{
+  const a=setup();
+  a.run("db.maquinas=[{id:'mq',nome:'T',horimetro:4400,proxRev:0}];db.abastecimentos=[{id:'a1',data:'2026-07-20',maqId:'mq',litros:1,horimetro:4300,obs:''},{id:'a2',data:'2026-07-20',maqId:'mq',litros:1,horimetro:4400,obs:''}]");
+  const dados=h=>({data:'2026-07-20',maqId:'mq',litros:50,horimetro:h,obs:''});
+  /* inclusão: entra depois dos que já estão no dia */
+  await a.submit('f-abast',dados(4350));
+  assert.equal(a.run('db.abastecimentos.length'),2);
+  assert.match(a.run('globalThis.errors[0].message'),/menor que 4\.400 h, registrado num abastecimento anterior/);
+  await a.submit('f-abast',dados(4400));assert.equal(a.run('db.abastecimentos.length'),3);
+  /* edição: o a1 não passa dos que vêm depois dele no dia, o a2 não fica abaixo do a1 */
+  await a.submit('f-abast',dados(4500),'a1');
+  assert.match(a.run('globalThis.errors[0].message'),/não pode passar de 4\.400 h, registrado num abastecimento posterior/);
+  assert.equal(a.run("db.abastecimentos.find(x=>x.id==='a1').horimetro"),4300);
+  await a.submit('f-abast',dados(4200),'a2');
+  assert.match(a.run('globalThis.errors[0].message'),/menor que 4\.300 h, registrado num abastecimento anterior/);
+  assert.equal(a.run("db.abastecimentos.find(x=>x.id==='a2').horimetro"),4400);
+  await a.submit('f-abast',dados(4350),'a1');
+  assert.equal(a.run("db.abastecimentos.find(x=>x.id==='a1').horimetro"),4350);
+  /* outra máquina e outro dia não entram na conta */
+  a.run("db.maquinas.push({id:'mq2',nome:'U',horimetro:100,proxRev:0})");
+  await a.submit('f-abast',{data:'2026-07-20',maqId:'mq2',litros:5,horimetro:90,obs:''});
+  assert.equal(a.run("db.abastecimentos.filter(x=>x.maqId==='mq2').length"),1);
+});
 test('lote seco continua sendo beneficiado e aparece sem contagem de sacas no seletor',async()=>{
   const a=setup();a.run("db.lotes[1].status='seco'");const id=a.run('db.lotes[1].id');
   const html=a.run('pgPos()');

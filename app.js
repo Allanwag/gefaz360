@@ -2851,9 +2851,13 @@ function validateForm(f){
     /* inclusão ou edição: o limite é o dos vizinhos por data da mesma máquina. O horímetro atual da máquina
        já inclui os abastecimentos posteriores, então não serve de limite — senão um abastecimento
        esquecido, com data antiga e valor coerente, seria recusado */
-    const outros=db.abastecimentos.filter(x=>x.id!==f.dataset.editId&&x.maqId===maqId),d=val(f,'data');
-    const antes=Math.max(0,...outros.filter(x=>x.data<d).map(x=>Number(x.horimetro)||0));
-    const depois=Math.min(Infinity,...outros.filter(x=>x.data>d).map(x=>Number(x.horimetro)||0));
+    /* no mesmo dia vale a ordem de lançamento: um abastecimento novo entra depois dos que já estão no dia, e
+       um editado mantém o lugar que já tinha */
+    const lista=db.abastecimentos,d=val(f,'data');
+    const eu=f.dataset.editId?lista.findIndex(x=>x.id===f.dataset.editId):lista.length;
+    const outros=lista.map((x,i)=>({x,i})).filter(({x})=>x.id!==f.dataset.editId&&x.maqId===maqId);
+    const antes=Math.max(0,...outros.filter(({x,i})=>x.data<d||(x.data===d&&i<eu)).map(({x})=>Number(x.horimetro)||0));
+    const depois=Math.min(Infinity,...outros.filter(({x,i})=>x.data>d||(x.data===d&&i>eu)).map(({x})=>Number(x.horimetro)||0));
     if(h<antes)add('horimetro',`O horímetro não pode ser menor que ${N(antes)} h, registrado num abastecimento anterior.`);
     else if(h>depois)add('horimetro',`O horímetro não pode passar de ${N(depois)} h, registrado num abastecimento posterior.`);
   }
