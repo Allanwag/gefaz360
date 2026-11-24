@@ -1702,9 +1702,10 @@ function pgPos(){
         <label>Corpo<input type="number" step="0.25" min="0" max="10" name="corpo" style="width:75px"></label>
         <label>Finalização<input type="number" step="0.25" min="0" max="10" name="fin" style="width:85px"></label>
         <label>Descritores<input name="descritores" style="width:210px" placeholder="chocolate, caramelo, cítrico…"></label>
+        <label style="flex-direction:row;align-items:center;gap:6px">Apagar o que deixar em branco <input type="checkbox" name="limpar" style="width:auto"></label>
         <button class="btn" ${db.lotes.some(l=>l.status==='seco'||l.status==='beneficiado')?'':'disabled'}>Salvar qualidade</button>
       </form>
-      <p class="note">COB é a classificação oficial brasileira (tipo por defeitos + bebida); SCAA é a pontuação de prova — <b>≥ 80 pontos é café especial</b>. Os atributos sensoriais (0–10) e os descritores compõem o perfil de xícara do lote. Campos em branco mantêm o que já está registrado no lote.</p></div>
+      <p class="note">COB é a classificação oficial brasileira (tipo por defeitos + bebida); SCAA é a pontuação de prova — <b>≥ 80 pontos é café especial</b>. Os atributos sensoriais (0–10) e os descritores compõem o perfil de xícara do lote. Campos em branco mantêm o que já está registrado no lote; para apagar um campo, esvazie-o e marque “Apagar o que deixar em branco”.</p></div>
     <div class="panel">${(()=>{
       const sl=db.lotes.filter(l=>l.sens).sort((a,b)=>a.data<b.data?1:-1)[0];
       if(!sl)return '<h3>Perfil sensorial</h3><p class="sub">Registre os atributos de um lote para ver o perfil.</p>';
@@ -3005,9 +3006,20 @@ $main.addEventListener('change',e=>{
 const val=(f,n)=>f.elements[n]?f.elements[n].value.trim():'';
 const num=(f,n)=>parseFloat(f.elements[n]?.value)||0;
 const ATRIBUTOS_SENSORIAIS=['aroma','sabor','acidez','corpo','fin'];
+/* campos de qualidade do lote que "Apagar o que deixar em branco" pode limpar: [nome do campo, rótulo na pergunta] */
+const CAMPOS_QUALIDADE=[['cobTipo','COB (tipo)'],['cobBebida','bebida'],['scaa','SCAA'],['peneira','peneira'],['peneiraPct','% retido acima'],['descritores','descritores']];
+const ROTULOS_SENS={aroma:'aroma',sabor:'sabor',acidez:'acidez',corpo:'corpo',fin:'finalização'};
+/* rótulos dos campos já gravados no lote que ficaram em branco no formulário, quando a caixa de apagar está marcada */
+function qualidadeParaApagar(f,lt){
+  if(!f.elements.limpar||!f.elements.limpar.checked)return [];
+  const branco=n=>val(f,n)==='';
+  return [...CAMPOS_QUALIDADE.filter(([n])=>branco(n)&&temValor(lt[n])).map(([,rotulo])=>rotulo),
+    ...ATRIBUTOS_SENSORIAIS.filter(n=>branco(n)&&temValor(lt.sens?.[n])).map(n=>ROTULOS_SENS[n])];
+}
 /* preenche o formulário de qualidade com o que o lote já tem (vazio onde não há), para que o que não for
-   digitado não pareça ser apagado ao salvar */
+   digitado não pareça ser apagado ao salvar; a caixa de apagar volta desmarcada a cada troca de lote */
 function preencheQualidade(f,lt){
+  if(f.elements.limpar)f.elements.limpar.checked=false;
   ['cobTipo','cobBebida','scaa','peneira','peneiraPct',...ATRIBUTOS_SENSORIAIS,'descritores'].forEach(n=>{
     if(!f.elements[n])return;
     const v=ATRIBUTOS_SENSORIAIS.includes(n)?lt?.sens?.[n]:lt?.[n];
@@ -3039,6 +3051,9 @@ $main.addEventListener('submit',async e=>{
     showFormError(f,[{field:'desc',message:'Este lançamento é gerenciado pelo módulo de origem e não pode ser editado diretamente.'}]);return;
   }
   /* o seletor abre no lote seco, mas quem escolhe um lote já beneficiado está corrigindo sacas: confirma antes */
+  if(f.id==='f-qual'){const lt=db.lotes.find(x=>x.id===val(f,'loteId'));
+    const apagar=lt?qualidadeParaApagar(f,lt):[];
+    if(apagar.length&&!confirm(`Apagar ${apagar.join(', ')} do lote ${lt.codigo}? Você poderá desfazer logo após a gravação.`))return;}
   if(f.id==='f-benef'){const lt=db.lotes.find(x=>x.id===val(f,'loteId'));
     if(lt&&lt.status==='beneficiado'&&!confirm(`Corrigir as sacas de ${lt.codigo} de ${N(lt.sacas,0)} para ${N(num(f,'sacas'),0)} sc?`))return;}
   if(f.id==='f-param'&&num(f,'mesInicioSafra')!==Number(db.params.mesInicioSafra)&&
@@ -3103,12 +3118,18 @@ $main.addEventListener('submit',async e=>{
   else if(f.id==='f-qual'){
     const lt=db.lotes.find(x=>x.id===val(f,'loteId'));
     if(lt){
-      /* campo em branco mantém o que já está no lote; só o que foi preenchido substitui (0 digitado vale) */
-      const dado=n=>val(f,n)!=='';
-      ['cobTipo','scaa','peneiraPct'].forEach(n=>{if(dado(n))lt[n]=num(f,n);});
-      ['cobBebida','peneira','descritores'].forEach(n=>{if(dado(n))lt[n]=val(f,n);});
-      const attrs=ATRIBUTOS_SENSORIAIS.filter(dado);
-      if(attrs.length)lt.sens={aroma:0,sabor:0,acidez:0,corpo:0,fin:0,...lt.sens,...Object.fromEntries(attrs.map(n=>[n,num(f,n)]))};
+      /* campo em branco mantém o que já está no lote; só o que foi preenchido substitui (0 digitado vale).
+         Com "Apagar o que deixar em branco" marcada, o campo em branco é removido do lote (já confirmado acima) */
+      const dado=n=>val(f,n)!=='',limpar=!!(f.elements.limpar&&f.elements.limpar.checked);
+      ['cobTipo','scaa','peneiraPct'].forEach(n=>{if(dado(n))lt[n]=num(f,n);else if(limpar)delete lt[n];});
+      ['cobBebida','peneira','descritores'].forEach(n=>{if(dado(n))lt[n]=val(f,n);else if(limpar)delete lt[n];});
+      const attrs=ATRIBUTOS_SENSORIAIS.filter(dado),preenchidos=Object.fromEntries(attrs.map(n=>[n,num(f,n)]));
+      if(limpar){
+        const s={...lt.sens,...preenchidos};
+        ATRIBUTOS_SENSORIAIS.filter(n=>!dado(n)).forEach(n=>delete s[n]);
+        if(Object.keys(s).length)lt.sens=s;else delete lt.sens;
+      }
+      else if(attrs.length)lt.sens={aroma:0,sabor:0,acidez:0,corpo:0,fin:0,...lt.sens,...preenchidos};
     }
   }
   else if(f.id==='f-vcafe'){

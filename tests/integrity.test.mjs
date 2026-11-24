@@ -25,7 +25,10 @@ function setup(initial=null,hash='#dash'){
   // extra: propriedades do botão clicado (ex.: closest() até a linha da tabela)
   const click=async(action,col,id,extra={})=>events['main:click']({target:{closest:()=>({dataset:{action,col,id},...extra})}});
   const submit=async(id,values,editId)=>{
-    const elements=Object.entries(values).map(([name,value])=>({name,value:String(value),tagName:'INPUT',type:'text',labels:[]}));
+    /* valor objeto = caixa de seleção: {checked:true} */
+    const elements=Object.entries(values).map(([name,value])=>value!==null&&typeof value==='object'
+      ?{name,value:'on',tagName:'INPUT',type:'checkbox',labels:[],...value}
+      :{name,value:String(value),tagName:'INPUT',type:'text',labels:[]});
     for(const el of elements)elements[el.name]=el;
     return events['main:submit']({preventDefault(){},target:{id,elements,dataset:editId?{editId}:{},hasAttribute:()=>false}});
   };
@@ -836,6 +839,38 @@ test('excluir aplicação concluída avisa o que muda no alerta de carência do 
   /* a exclusão continua funcionando quando o dono confirma */
   a.run('confirm=()=>true');monta('[0]');a.run('confirm=()=>true');
   await a.click('del','pulvOS','o1');assert.equal(a.run('db.pulvOS.length'),0);assert.equal(a.run("statusCarencia('c1')"),null);
+});
+test('qualidade: "apagar o que deixar em branco" limpa campos já gravados, com confirmação',async()=>{
+  const a=setup();const id=a.run('db.lotes[0].id');
+  a.run("globalThis.perguntas=[];confirm=m=>{perguntas.push(m);return false}");
+  /* sem a caixa, campo em branco continua preservando e não pergunta nada */
+  await a.submit('f-qual',{loteId:id,descritores:'',scaa:'83'});
+  assert.equal(a.run('db.lotes[0].scaa'),83);assert.equal(a.run('db.lotes[0].descritores'),'Chocolate, caramelo, nozes');
+  assert.equal(a.run('perguntas.length'),0);
+  /* com a caixa e o dono recusando: nada muda, e a pergunta diz o que seria apagado */
+  await a.submit('f-qual',{loteId:id,descritores:'',scaa:'84',aroma:'9',limpar:{checked:true}});
+  assert.match(a.run('perguntas[0]'),/^Apagar COB \(tipo\), bebida, peneira, % retido acima, descritores, sabor, acidez, corpo, finalização do lote L-2026-014\?/);
+  assert.equal(a.run('db.lotes[0].scaa'),83);assert.equal(a.run('db.lotes[0].descritores'),'Chocolate, caramelo, nozes');
+  /* confirmando: o que ficou em branco some, o que foi preenchido vale */
+  a.run('confirm=()=>true');
+  await a.submit('f-qual',{loteId:id,descritores:'',scaa:'84',aroma:'9',limpar:{checked:true}});
+  assert.equal(a.run('db.lotes[0].scaa'),84);
+  assert.equal(a.run("['cobTipo','cobBebida','peneira','peneiraPct','descritores'].some(k=>k in db.lotes[0])"),false);
+  assert.equal(a.run('JSON.stringify(db.lotes[0].sens)'),'{"aroma":9}');
+  assert.doesNotThrow(()=>a.run('normalizeDatabase(JSON.parse(JSON.stringify(db)),{strict:true})'));
+  /* tudo em branco com a caixa: a qualidade do lote inteira some, inclusive o perfil sensorial */
+  await a.submit('f-qual',{loteId:id,limpar:{checked:true}});
+  assert.equal(a.run("['scaa','sens'].some(k=>k in db.lotes[0])"),false);
+  /* nada gravado para apagar: não pergunta */
+  a.run('perguntas.length=0;confirm=m=>{perguntas.push(m);return false}');
+  await a.submit('f-qual',{loteId:id,limpar:{checked:true}});assert.equal(a.run('perguntas.length'),0);
+});
+test('trocar o lote no formulário de qualidade desmarca "apagar o que deixar em branco"',async()=>{
+  const a=setup();const id0=a.run('db.lotes[0].id');
+  a.run(`globalThis.fq={elements:{limpar:{checked:true}}};for(const n of ['loteId','cobTipo','cobBebida','scaa','peneira','peneiraPct','aroma','sabor','acidez','corpo','fin','descritores'])fq.elements[n]={name:n,value:''};`);
+  await a.change({name:'loteId',value:id0,closest:sel=>sel==='#f-qual'?a.run('fq'):null});
+  assert.equal(a.run('fq.elements.limpar.checked'),false);
+  assert.equal(a.run('fq.elements.scaa.value'),'82.5');
 });
 test('lote seco continua sendo beneficiado e aparece sem contagem de sacas no seletor',async()=>{
   const a=setup();a.run("db.lotes[1].status='seco'");const id=a.run('db.lotes[1].id');
