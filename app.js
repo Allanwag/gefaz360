@@ -1605,6 +1605,8 @@ function pgPos(){
   const taxaMedia=concl.length?concl.reduce((a,s)=>a+taxaSec(s),0)/concl.length:0;
   const tempoMedio=concl.length?concl.reduce((a,s)=>a+(s.horas||0),0)/concl.length:0;
   const lote=id=>db.lotes.find(l=>l.id===id)||{codigo:'—'},estoqueCafe=estoqueCafeDisponivel();
+  /* lotes do Beneficiar: secos primeiro; o campo de sacas já abre com as do lote que vem selecionado */
+  const lotesBenef=[...db.lotes.filter(l=>l.status==='seco'),...db.lotes.filter(l=>l.status==='beneficiado')];
   const grafSec=db.secagens.filter(s=>(s.leituras||[]).length>1).sort((a,b)=>a.dataInicio<b.dataInicio?1:-1)[0];
   const pillOrigem=o=>`<span class="pill ${o==='Árvore'?'good':'warn'}">${esc(o)}</span>`;
   return `<h1>Café · Pós-colheita</h1>
@@ -1716,9 +1718,9 @@ function pgPos(){
   <div class="row2">
     <div class="panel"><h3>Beneficiar lote seco / corrigir sacas</h3>
       <form class="f" id="f-benef">
-        <label>Lote<select name="loteId">${[...db.lotes.filter(l=>l.status==='seco'),...db.lotes.filter(l=>l.status==='beneficiado')].map(l=>`<option value="${l.id}">${esc(l.codigo)}${l.status==='beneficiado'?' · '+N(l.sacas,0)+' sc':''}</option>`).join('')}</select></label>
-        <label>Sacas beneficiadas (60 kg)<input type="number" step="1" name="sacas" required style="width:150px"></label>
-        <button class="btn" ${db.lotes.some(l=>l.status==='seco'||l.status==='beneficiado')?'':'disabled'}>Registrar</button>
+        <label>Lote<select name="loteId">${lotesBenef.map(l=>`<option value="${l.id}">${esc(l.codigo)}${l.status==='beneficiado'?' · '+N(l.sacas,0)+' sc':''}</option>`).join('')}</select></label>
+        <label>Sacas beneficiadas (60 kg)<input type="number" step="1" name="sacas" value="${lotesBenef[0]?.status==='beneficiado'?esc(String(lotesBenef[0].sacas)):''}" required style="width:150px"></label>
+        <button class="btn" ${lotesBenef.length?'':'disabled'}>Registrar</button>
       </form>
       <p class="note">Com as carretas do lote e as sacas beneficiadas, o Gefaz360 calcula o <b>rendimento real L/saca</b> (passe o mouse na coluna "Sacas benef.") — use-o para calibrar o parâmetro de ${N(db.params.litrosPorSaca)} L/sc em Cadastros & Dados.</p></div>
     <div class="panel"><h3>Venda de café</h3>
@@ -2827,7 +2829,9 @@ function validateForm(f){
     const doLote=db.vendasCafe.filter(v=>v.loteId===loteId).reduce((s,v)=>s+(Number(v.sacas)||0),0);
     const outros=db.lotes.filter(l=>l.id!==loteId).reduce((s,l)=>s+(Number(l.sacas)||0),0);
     const vendido=db.vendasCafe.reduce((s,v)=>s+(Number(v.sacas)||0),0);
-    if(sacas<doLote-0.001)add('sacas',`Este lote já tem ${N(doLote,0)} saca(s) vendidas.`);
+    const lt=db.lotes.find(l=>l.id===loteId);
+    if(lt&&lt.status!=='seco'&&lt.status!=='beneficiado')add('loteId','Este lote ainda não está seco. Conclua a secagem antes de beneficiar.');
+    else if(sacas<doLote-0.001)add('sacas',`Este lote já tem ${N(doLote,0)} saca(s) vendidas.`);
     else if(outros+sacas<vendido-0.001)add('sacas','As vendas de café já registradas excedem esse total.');
   }
   if(f.id==='f-vcafe'){
@@ -2987,6 +2991,9 @@ $main.addEventListener('change',e=>{
   }
   const fq=e.target.closest&&e.target.closest('#f-qual');
   if(fq&&e.target.name==='loteId')preencheQualidade(fq,db.lotes.find(l=>l.id===e.target.value));
+  /* Beneficiar: ao trocar o lote, o campo mostra as sacas que o lote já tem (vazio se ainda está seco) */
+  const fb=e.target.closest&&e.target.closest('#f-benef');
+  if(fb&&e.target.name==='loteId'){const lt=db.lotes.find(l=>l.id===e.target.value);fb.elements.sacas.value=lt&&lt.status==='beneficiado'?String(lt.sacas):'';}
   if(e.target.id==='mapa-modo'){mapaModo=e.target.value;render();}
 });
 

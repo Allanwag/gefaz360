@@ -772,6 +772,24 @@ test('clicar no item de menu da tela atual volta ao topo, e as ações na tela c
   assert.equal(a.run('rolagemAposRender(rotaDesenhada,rota,500)'),0);
   assert.equal(a.run('rota'),'cafe');
 });
+test('Beneficiar preenche as sacas atuais do lote selecionado e recusa lote que não está seco nem beneficiado',async()=>{
+  const a=setup();
+  /* só há o lote beneficiado: o campo já abre com as sacas dele */
+  assert.match(a.run('pgPos()'),/id="f-benef"[\s\S]*?name="sacas" value="46"/);
+  a.run("db.lotes.push({id:'ls',codigo:'L-2026-099',data:'2026-08-01',talhaoId:'c1',origem:'Árvore',chuva:false,carretas:1,obs:'',status:'seco'})");
+  /* o seco vem primeiro: campo vazio */
+  assert.match(a.run('pgPos()'),/id="f-benef"[\s\S]*?name="sacas" value=""/);
+  a.run("globalThis.fb={elements:{sacas:{value:'x'},loteId:{value:''}}}");
+  const alvo=id=>({name:'loteId',value:id,closest:sel=>sel==='#f-benef'?a.run('fb'):null});
+  await a.change(alvo(a.run('db.lotes[0].id')));assert.equal(a.run('fb.elements.sacas.value'),'46');
+  await a.change(alvo('ls'));assert.equal(a.run('fb.elements.sacas.value'),'');
+  /* lote que não está seco nem beneficiado é recusado, com o lote intacto */
+  a.run("db.lotes.find(l=>l.id==='ls').status='terreiro'");
+  await a.submit('f-benef',{loteId:'ls',sacas:20});
+  assert.equal(a.run("db.lotes.find(l=>l.id==='ls').status"),'terreiro');
+  assert.equal(a.run('globalThis.errors[0].field'),'loteId');
+  assert.equal(a.run('globalThis.errors[0].message'),'Este lote ainda não está seco. Conclua a secagem antes de beneficiar.');
+});
 test('lote seco continua sendo beneficiado e aparece sem contagem de sacas no seletor',async()=>{
   const a=setup();a.run("db.lotes[1].status='seco'");const id=a.run('db.lotes[1].id');
   const html=a.run('pgPos()');
