@@ -708,6 +708,38 @@ test('correção de sacas não deixa o total beneficiado abaixo do total vendido
   assert.equal(a.run('db.lotes[0].sacas'),46);
   await a.submit('f-benef',{loteId:id,sacas:40});assert.equal(a.run('db.lotes[0].sacas'),40);
 });
+test('f-benef lista o lote seco antes dos já beneficiados e pede confirmação ao corrigir sacas',async()=>{
+  const a=setup();
+  a.run("db.lotes.push({id:'ls',codigo:'L-2026-099',data:'2026-08-01',talhaoId:'c1',origem:'Árvore',chuva:false,carretas:1,obs:'',status:'seco'})");
+  assert.match(a.run('pgPos()'),/id="f-benef"[\s\S]*?<select name="loteId"><option value="ls">L-2026-099<\/option><option value="[^"]*">L-2026-014 · 46 sc<\/option>/);
+  a.run("globalThis.perguntas=[];confirm=m=>{perguntas.push(m);return false}");
+  const id=a.run('db.lotes[0].id');
+  await a.submit('f-benef',{loteId:id,sacas:40});
+  assert.equal(a.run('db.lotes[0].sacas'),46);
+  assert.deepEqual(JSON.parse(a.run('JSON.stringify(perguntas)')),['Corrigir as sacas de L-2026-014 de 46 para 40 sc?']);
+  await a.submit('f-benef',{loteId:'ls',sacas:20});
+  assert.equal(a.run('perguntas.length'),1);
+  assert.equal(a.run("db.lotes.find(l=>l.id==='ls').status"),'beneficiado');
+  a.run('confirm=()=>true');
+  await a.submit('f-benef',{loteId:id,sacas:40});assert.equal(a.run('db.lotes[0].sacas'),40);
+});
+test('excluir o único abastecimento avisa que o horímetro da máquina continua alto',async()=>{
+  const a=setup();a.run("db.abastecimentos=[];showStatus=m=>{globalThis.status=m}");
+  const m=a.run('db.maquinas[0].id');
+  await a.submit('f-abast',{data:'2026-07-20',maqId:m,litros:100,horimetro:42300,obs:''});
+  const rid=a.run('db.abastecimentos.at(-1).id');
+  await a.click('del','abastecimentos',rid);
+  assert.equal(a.run('db.maquinas[0].horimetro'),42300);
+  assert.equal(a.run('status'),'Registro excluído. Confira o horímetro de Trator John Deere 6110J em Oficina: ele ainda mostra 42.300 h.');
+  /* com outros abastecimentos a máquina é recalculada e não há aviso; horímetro ajustado à mão também não avisa */
+  await a.submit('f-abast',{data:'2026-07-21',maqId:m,litros:100,horimetro:4300,obs:''});
+  await a.submit('f-abast',{data:'2026-07-22',maqId:m,litros:100,horimetro:4310,obs:''});
+  await a.click('del','abastecimentos',a.run('db.abastecimentos.at(-1).id'));
+  assert.equal(a.run('status'),'Registro excluído.');
+  a.run("db.maquinas[0].horimetro=5000");
+  await a.click('del','abastecimentos',a.run('db.abastecimentos.at(-1).id'));
+  assert.equal(a.run('status'),'Registro excluído.');
+});
 test('lote seco continua sendo beneficiado e aparece sem contagem de sacas no seletor',async()=>{
   const a=setup();a.run("db.lotes[1].status='seco'");const id=a.run('db.lotes[1].id');
   const html=a.run('pgPos()');

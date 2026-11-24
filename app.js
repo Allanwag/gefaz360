@@ -1716,7 +1716,7 @@ function pgPos(){
   <div class="row2">
     <div class="panel"><h3>Beneficiar lote seco / corrigir sacas</h3>
       <form class="f" id="f-benef">
-        <label>Lote<select name="loteId">${db.lotes.filter(l=>l.status==='seco'||l.status==='beneficiado').map(l=>`<option value="${l.id}">${esc(l.codigo)}${l.status==='beneficiado'?' · '+N(l.sacas,0)+' sc':''}</option>`).join('')}</select></label>
+        <label>Lote<select name="loteId">${[...db.lotes.filter(l=>l.status==='seco'),...db.lotes.filter(l=>l.status==='beneficiado')].map(l=>`<option value="${l.id}">${esc(l.codigo)}${l.status==='beneficiado'?' · '+N(l.sacas,0)+' sc':''}</option>`).join('')}</select></label>
         <label>Sacas beneficiadas (60 kg)<input type="number" step="1" name="sacas" required style="width:150px"></label>
         <button class="btn" ${db.lotes.some(l=>l.status==='seco'||l.status==='beneficiado')?'':'disabled'}>Registrar</button>
       </form>
@@ -3021,6 +3021,9 @@ $main.addEventListener('submit',async e=>{
   if(editingCol==='fin'&&(editingRec?.cargaId||editingRec?.vendaId||editingRec?.pulvOSId)){
     showFormError(f,[{field:'desc',message:'Este lançamento é gerenciado pelo módulo de origem e não pode ser editado diretamente.'}]);return;
   }
+  /* o seletor abre no lote seco, mas quem escolhe um lote já beneficiado está corrigindo sacas: confirma antes */
+  if(f.id==='f-benef'){const lt=db.lotes.find(x=>x.id===val(f,'loteId'));
+    if(lt&&lt.status==='beneficiado'&&!confirm(`Corrigir as sacas de ${lt.codigo} de ${N(lt.sacas,0)} para ${N(num(f,'sacas'),0)} sc?`))return;}
   if(f.id==='f-param'&&num(f,'mesInicioSafra')!==Number(db.params.mesInicioSafra)&&
     !confirm('Alterar o início do ano-safra reclassificará todos os lançamentos por período. Deseja continuar?'))return;
   await beginUndo(f.dataset.editId?'Edição de registro':'Inclusão de registro');
@@ -3311,9 +3314,17 @@ $main.addEventListener('click',async e=>{
     if(col==='vendasCafe')db.fin=db.fin.filter(fx=>fx.vendaId!==id);
     if(col==='cargas')db.fin=db.fin.filter(fx=>fx.cargaId!==id);
     if(concluida)estornaAplicacao(alvo);
-    if(col==='abastecimentos')recalcHorimetro(alvo.maqId,alvo.horimetro);
+    let avisoHorimetro='';
+    if(col==='abastecimentos'){
+      recalcHorimetro(alvo.maqId,alvo.horimetro);
+      /* sem abastecimento restante não há de onde recalcular: se o horímetro ainda é o do registro excluído,
+         avisa para o usuário conferir a máquina (ela pode ser editada em Oficina) */
+      const mq=db.maquinas.find(x=>x.id===alvo.maqId);
+      if(mq&&!db.abastecimentos.some(x=>x.maqId===alvo.maqId)&&Number(mq.horimetro)===Number(alvo.horimetro))
+        avisoHorimetro=` Confira o horímetro de ${mq.nome} em Oficina: ele ainda mostra ${N(mq.horimetro)} h.`;
+    }
     if(col==='os'&&osSelecionada===id)osSelecionada='';
-    changed=true;statusMessage='Registro excluído.';
+    changed=true;statusMessage='Registro excluído.'+avisoHorimetro;
   }
   else if(a==='ver-doc'){await docVer(id);return;}
   else if(a==='baixar-doc'){await docBaixar(id);return;}
