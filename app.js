@@ -3235,6 +3235,16 @@ function estornaAplicacao(o){
     if(p&&Number.isFinite(n)&&n>0)p.qtd=(Number(p.qtd)||0)+n;});
   db.fin=db.fin.filter(f=>f.pulvOSId!==o.id);
 }
+/* o que a exclusão de uma aplicação concluída faz com o aviso de carência/reentrada do talhão: refaz a conta sem
+   essa ordem e compara. Devolve '' (nada muda) ou uma frase começando por espaço para entrar na pergunta. */
+function avisoCarenciaAoExcluir(o){
+  const antes=statusCarencia(o.talhaoId);if(!antes)return '';
+  const salvo=db.pulvOS;db.pulvOS=salvo.filter(x=>x.id!==o.id);
+  let depois;try{depois=statusCarencia(o.talhaoId);}finally{db.pulvOS=salvo;}
+  if(depois&&depois.libera===antes.libera&&depois.liberaRe===antes.liberaRe)return '';
+  const desc=c=>c.libera?`não colher até ${dBRy(c.libera)}`:`entrada liberada em ${dBRy(c.liberaRe)}`;
+  return ` Atenção: o aviso do talhão (${desc(antes)}) ${depois?'passa a ser: '+desc(depois):'deixa de valer'}.`;
+}
 function deleteBlock(col,id){
   const rec=db[col]?.find(x=>x.id===id);
   if(!rec)return 'O registro não existe mais.';
@@ -3319,7 +3329,7 @@ $main.addEventListener('click',async e=>{
     const alvo=db[col].find(x=>x.id===id);
     const concluida=col==='pulvOS'&&alvo.status==='concluida';
     if(concluida){
-      if(!confirm(`Excluir a aplicação concluída de ${dBRy(dataAplicacao(alvo))} em ${tal(alvo.talhaoId).nome}? O custo sai do Financeiro e os defensivos voltam ao estoque. Você poderá desfazer logo após a exclusão.`))return;
+      if(!confirm(`Excluir a aplicação concluída de ${dBRy(dataAplicacao(alvo))} em ${tal(alvo.talhaoId).nome}? O custo sai do Financeiro e os defensivos voltam ao estoque.${avisoCarenciaAoExcluir(alvo)} Você poderá desfazer logo após a exclusão.`))return;
     }
     else if(!confirm(`Excluir permanentemente “${recordName(alvo)}”? Você poderá desfazer logo após a exclusão.`))return;
     const recovered=await beginUndo('Exclusão de registro');

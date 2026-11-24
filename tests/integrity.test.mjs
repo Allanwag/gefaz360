@@ -811,6 +811,32 @@ test('mensagens de saldo de sacas mostram a fração em vez de arredondar',async
   await a.submit('f-benef',{loteId:id,sacas:29});
   assert.equal(a.run('globalThis.errors[0].message'),'Este lote já tem 30 saca(s) vendidas.');
 });
+test('excluir aplicação concluída avisa o que muda no alerta de carência do talhão',async()=>{
+  const a=setup();
+  const monta=ordens=>a.run(`db.defensivos=[{id:'p1',nome:'Prod',qtd:50,preco:1,carencia:7,reentrada:24}];
+    db.receitas=[{id:'r1',nome:'R',itens:[{prodId:'p1',dose:1}]}];db.fin=[];
+    db.pulvOS=${ordens}.map((d,i)=>({id:'o'+(i+1),talhaoId:'c1',receitaId:'r1',area:3,status:'concluida',data:addDias(hoje,d),dataAplicacao:addDias(hoje,d),baixas:[{prodId:'p1',qtd:3}]}));
+    globalThis.perguntas=[];confirm=m=>{perguntas.push(m);return false}`);
+  const planoSemAviso=/^Excluir a aplicação concluída de \d{2}\/\d{2}\/\d{2} em Santa Rita\? O custo sai do Financeiro e os defensivos voltam ao estoque\. Você poderá desfazer logo após a exclusão\.$/;
+  /* única aplicação em carência: o aviso do talhão deixa de valer */
+  monta('[0]');await a.click('del','pulvOS','o1');
+  assert.match(a.run('perguntas[0]'),/estoque\. Atenção: o aviso do talhão \(não colher até \d{2}\/\d{2}\/\d{2}\) deixa de valer\. Você poderá desfazer logo após a exclusão\.$/);
+  assert.equal(a.run('db.pulvOS.length'),1);
+  /* a aplicação antiga, já fora da carência, não muda nada: texto igual ao do plano */
+  monta('[0,-20]');await a.click('del','pulvOS','o2');
+  assert.match(a.run('perguntas[0]'),planoSemAviso);
+  /* outra aplicação em carência assume: o aviso muda de data */
+  monta('[0,-1]');await a.click('del','pulvOS','o1');
+  assert.match(a.run('perguntas[0]'),/Atenção: o aviso do talhão \(não colher até \d{2}\/\d{2}\/\d{2}\) passa a ser: não colher até \d{2}\/\d{2}\/\d{2}\. Você/);
+  assert.notEqual(a.run('perguntas[0].match(/até (\\d{2}\\/\\d{2}\\/\\d{2})\\)/)[1]'),a.run('perguntas[0].match(/passa a ser: não colher até (\\d{2}\\/\\d{2}\\/\\d{2})/)[1]'));
+  /* só reentrada pendente: o aviso fala da entrada no talhão */
+  a.run("db.defensivos[0].carencia=0;db.defensivos[0].reentrada=48");
+  monta('[0]');a.run("db.defensivos[0].carencia=0;db.defensivos[0].reentrada=48");await a.click('del','pulvOS','o1');
+  assert.match(a.run('perguntas[0]'),/Atenção: o aviso do talhão \(entrada liberada em \d{2}\/\d{2}\/\d{2}\) deixa de valer\./);
+  /* a exclusão continua funcionando quando o dono confirma */
+  a.run('confirm=()=>true');monta('[0]');a.run('confirm=()=>true');
+  await a.click('del','pulvOS','o1');assert.equal(a.run('db.pulvOS.length'),0);assert.equal(a.run("statusCarencia('c1')"),null);
+});
 test('lote seco continua sendo beneficiado e aparece sem contagem de sacas no seletor',async()=>{
   const a=setup();a.run("db.lotes[1].status='seco'");const id=a.run('db.lotes[1].id');
   const html=a.run('pgPos()');
