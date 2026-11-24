@@ -1714,11 +1714,11 @@ function pgPos(){
   </div>
   <h2>Beneficiamento & venda</h2>
   <div class="row2">
-    <div class="panel"><h3>Beneficiar lote seco</h3>
+    <div class="panel"><h3>Beneficiar lote seco / corrigir sacas</h3>
       <form class="f" id="f-benef">
-        <label>Lote<select name="loteId">${db.lotes.filter(l=>l.status==='seco').map(l=>`<option value="${l.id}">${esc(l.codigo)}</option>`).join('')}</select></label>
+        <label>Lote<select name="loteId">${db.lotes.filter(l=>l.status==='seco'||l.status==='beneficiado').map(l=>`<option value="${l.id}">${esc(l.codigo)}${l.status==='beneficiado'?' · '+N(l.sacas,0)+' sc':''}</option>`).join('')}</select></label>
         <label>Sacas beneficiadas (60 kg)<input type="number" step="1" name="sacas" required style="width:150px"></label>
-        <button class="btn" ${db.lotes.some(l=>l.status==='seco')?'':'disabled'}>Registrar</button>
+        <button class="btn" ${db.lotes.some(l=>l.status==='seco'||l.status==='beneficiado')?'':'disabled'}>Registrar</button>
       </form>
       <p class="note">Com as carretas do lote e as sacas beneficiadas, o Gefaz360 calcula o <b>rendimento real L/saca</b> (passe o mouse na coluna "Sacas benef.") — use-o para calibrar o parâmetro de ${N(db.params.litrosPorSaca)} L/sc em Cadastros & Dados.</p></div>
     <div class="panel"><h3>Venda de café</h3>
@@ -2280,7 +2280,7 @@ function pgMapa(){
   ${gts.length?`<div class="tblwrap"><table><thead><tr><th>Polígono</th><th>Talhão vinculado</th><th>Cultura</th><th class="num">Área mapeada</th><th></th></tr></thead><tbody>
     ${gts.map(g=>{const t=tal(g.talhaoId);return `<tr><td>${esc(g.nome)||'—'}</td><td>${g.talhaoId?esc(t.nome):'não vinculado'}</td>
       <td>${esc(NOMES_CULT[g.cultura]||g.cultura||'—')}</td><td class="num">${N(g.areaHa,2)} ha</td>
-      <td>${g.talhaoId?`<button class="btn mini ghost" data-action="ficha-talhao-mapa" data-id="${g.talhaoId}">Abrir ficha</button>`:'—'}</td></tr>`;}).join('')}
+      <td>${g.talhaoId?`<button class="btn mini ghost" data-action="ficha-talhao-mapa" data-id="${g.talhaoId}">Abrir ficha</button> `:''}<button class="x" data-action="del" data-col="geoTalhoes" data-id="${g.id}" title="Excluir">✕</button></td></tr>`;}).join('')}
   </tbody></table></div>`:''}
   <div class="panel"><h3>Registrar ocorrência (MIP — pragas, doenças, plantas daninhas)</h3>
     <form class="f" id="f-mip">
@@ -2821,6 +2821,15 @@ function validateForm(f){
     cargaErrors(c).forEach(message=>add(message.includes('tara')?'tara':message.includes('umidade')?'umidade':message.includes('preço')?'preco':'bruto',message));
   }
   if(f.id==='f-chuva'&&val(f,'data')>hoje)add('data','A chuva não pode ser registrada em uma data futura.');
+  if(f.id==='f-benef'){
+    /* corrigir as sacas de um lote já beneficiado nunca deixa o lote nem o total abaixo do que já foi vendido */
+    const loteId=val(f,'loteId'),sacas=num(f,'sacas');
+    const doLote=db.vendasCafe.filter(v=>v.loteId===loteId).reduce((s,v)=>s+(Number(v.sacas)||0),0);
+    const outros=db.lotes.filter(l=>l.id!==loteId).reduce((s,l)=>s+(Number(l.sacas)||0),0);
+    const vendido=db.vendasCafe.reduce((s,v)=>s+(Number(v.sacas)||0),0);
+    if(sacas<doLote-0.001)add('sacas',`Este lote já tem ${N(doLote,0)} saca(s) vendidas.`);
+    else if(outros+sacas<vendido-0.001)add('sacas','As vendas de café já registradas excedem esse total.');
+  }
   if(f.id==='f-vcafe'){
     const loteId=val(f,'loteId'),sacas=num(f,'sacas'),total=estoqueCafeDisponivel(),disponivel=loteId?Math.min(sacasDisponiveis(loteId),total):total;
     if(sacas>disponivel+0.001)add('sacas',loteId?`Este lote tem apenas ${N(disponivel,0)} saca(s) disponíveis.`:`O estoque total tem apenas ${N(disponivel,0)} saca(s) disponíveis.`);

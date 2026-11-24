@@ -668,3 +668,51 @@ test('o banco resultante da importação do PVgest passa na validação estrita'
     talhoes:[{nome:'Nova Gleba',cultura:'Trigo',area:4},{nome:'Outra',cultura:'Feijão',area:2}]},db)`);
   assert.doesNotThrow(()=>a.run('normalizeDatabase(JSON.parse(JSON.stringify(r.db)),{strict:true})'));
 });
+test('polígono do mapa pode ser excluído e libera o talhão',async()=>{
+  const a=setup();
+  a.run("db.geoTalhoes=[{id:'g1',talhaoId:'c1',nome:'X',cultura:'cafe',coords:[[-45,-19],[-45.01,-19],[-45,-19.01]],areaHa:1}]");
+  assert.match(a.run('pgMapa()'),/data-action="del" data-col="geoTalhoes" data-id="g1"/);
+  await a.click('del','geoTalhoes','g1');
+  assert.equal(a.run('db.geoTalhoes.length'),0);
+  assert.equal(a.run("referencesFor('talhoes','c1').some(x=>x[0]==='geoTalhoes')"),false);
+});
+test('polígono não vinculado também tem botão de excluir, sem o botão da ficha',()=>{
+  const a=setup();
+  a.run("db.geoTalhoes=[{id:'g2',talhaoId:'',nome:'Solto',cultura:'',coords:[[-45,-19],[-45.01,-19],[-45,-19.01]],areaHa:1}]");
+  const html=a.run('pgMapa()');
+  assert.match(html,/data-action="del" data-col="geoTalhoes" data-id="g2"/);
+  assert.doesNotMatch(html,/Abrir ficha/);
+  a.run("db.geoTalhoes[0].talhaoId='c1'");
+  assert.match(a.run('pgMapa()'),/Abrir ficha<\/button> <button class="x" data-action="del" data-col="geoTalhoes" data-id="g2"/);
+});
+test('sacas beneficiadas podem ser corrigidas, nunca abaixo do vendido',async()=>{
+  const a=setup();const id=a.run('db.lotes[0].id');
+  assert.match(a.run('pgPos()'),/id="f-benef"[\s\S]*?L-2026-014 · 46 sc/);
+  await a.submit('f-benef',{loteId:id,sacas:20});assert.equal(a.run('db.lotes[0].sacas'),46);
+  await a.submit('f-benef',{loteId:id,sacas:40});assert.equal(a.run('db.lotes[0].sacas'),40);
+  assert.equal(a.run('db.lotes[0].status'),'beneficiado');
+});
+test('correção de sacas abaixo do vendido do lote explica quantas já foram vendidas',async()=>{
+  const a=setup();const id=a.run('db.lotes[0].id');
+  await a.submit('f-benef',{loteId:id,sacas:29});
+  assert.equal(a.run('globalThis.errors[0].field'),'sacas');
+  assert.equal(a.run('globalThis.errors[0].message'),'Este lote já tem 30 saca(s) vendidas.');
+  await a.submit('f-benef',{loteId:id,sacas:30});assert.equal(a.run('db.lotes[0].sacas'),30);
+});
+test('correção de sacas não deixa o total beneficiado abaixo do total vendido',async()=>{
+  const a=setup();const id=a.run('db.lotes[0].id');
+  a.run("db.vendasCafe.push({id:'vx',data:'2026-07-20',loteId:'',sacas:10,preco:2000,comprador:'Avulso',nf:'1',obs:''})");
+  await a.submit('f-benef',{loteId:id,sacas:35});
+  assert.equal(a.run('globalThis.errors[0].field'),'sacas');
+  assert.equal(a.run('globalThis.errors[0].message'),'As vendas de café já registradas excedem esse total.');
+  assert.equal(a.run('db.lotes[0].sacas'),46);
+  await a.submit('f-benef',{loteId:id,sacas:40});assert.equal(a.run('db.lotes[0].sacas'),40);
+});
+test('lote seco continua sendo beneficiado e aparece sem contagem de sacas no seletor',async()=>{
+  const a=setup();a.run("db.lotes[1].status='seco'");const id=a.run('db.lotes[1].id');
+  const html=a.run('pgPos()');
+  assert.match(html,/<option value="[^"]*">L-2026-015<\/option>/);
+  assert.match(html,/Beneficiar lote seco \/ corrigir sacas/);
+  await a.submit('f-benef',{loteId:id,sacas:20});
+  assert.equal(a.run('db.lotes[1].sacas'),20);assert.equal(a.run('db.lotes[1].status'),'beneficiado');
+});
