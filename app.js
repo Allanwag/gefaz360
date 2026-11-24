@@ -1978,7 +1978,11 @@ function parseNumero(s){
   const n=parseFloat(s.includes(',')?s.replace(/\./g,'').replace(',','.'):/^\d{1,3}(\.\d{3})+$/.test(s)?s.replace(/\./g,''):s);
   return isNaN(n)?null:n;
 }
-function acharTalhao(txt){const low=txt.toLowerCase();return db.talhoes.find(t=>low.includes(t.nome.toLowerCase()));}
+/* talhão citado no texto: com `cultura`, só os dessa cultura; entre os nomes citados vale o mais longo
+   ("Serra Nova" ganha de "Serra"); nome vazio nunca casa */
+function acharTalhao(txt,cultura){const low=txt.toLowerCase();
+  return db.talhoes.filter(t=>{const n=String(t.nome||'').trim().toLowerCase();return n&&(!cultura||t.cultura===cultura)&&low.includes(n);})
+    .sort((a,b)=>String(b.nome).trim().length-String(a.nome).trim().length)[0];}
 /* nome completo primeiro; senão, a máquina com mais palavras do nome (ou do tipo) citadas como palavra
    inteira — "30 litros" não pode casar com o "3" da "K3". Empate fica sem máquina, para o usuário escolher. */
 function acharMaquina(txt){const low=txt.toLowerCase().replace(/[\d.,]+\s*litros?|hor[ií]metro\s*[\d.,]+/g,' ');
@@ -2004,7 +2008,7 @@ function parseLinha(linha){
   if(m){const mm=parseNumero(m[1]);
     return {tipo:'chuva',original:l,status:'pendente',rotulo:'Chuva',campos:{mm:mm||0},resumo:N(mm||0,1)+' mm'};}
   m=low.match(new RegExp('(colhi|entrei|entraram|lancei|lan[cç]ar)\\w*\\s+('+NUMPAL_ALT+')\\s*carretas?'));
-  if(m){const qtd=parseNumero(m[2]),tal=acharTalhao(l);
+  if(m){const qtd=parseNumero(m[2]),tal=acharTalhao(l,'cafe');
     let tipoColheita='Manual (pano)';
     if(low.includes('mecanizad'))tipoColheita='Mecanizada';else if(low.includes('varri'))tipoColheita='Varrição';
     return {tipo:'colheita',original:l,status:'pendente',rotulo:'Colheita (carretas)',
@@ -2761,6 +2765,34 @@ function showFormError(f,errors){
   p.setAttribute('role','alert');p.textContent=errors.map(x=>x.message).join(' ');f.prepend(p);
   if(el?.setAttribute){el.setAttribute('aria-invalid','true');el.setAttribute('aria-describedby',p.id);el.dataset.errorDescribedby='1';el.focus();}
 }
+/* Importação do PVgest sobre uma CÓPIA de `base`: formato malformado lança aqui, antes de qualquer ponto
+   de recuperação ou troca de banco, e `base` nunca é tocada. O chamador só faz db=resultado.db depois. */
+const CULTURAS_PVGEST=[['caf','cafe'],['milh','milho'],['soj','soja'],['sorg','sorgo'],['trig','trigo']];
+function importaPvgest(d,base){
+  const novo=JSON.parse(JSON.stringify(base)),idMap={};
+  const produtos=d.produtos||[],receitas=d.receitas||[],talhoes=d.talhoes||[];
+  produtos.forEach(p=>{
+    const nid=uid();idMap[p.id]=nid;
+    novo.defensivos.push({id:nid,nome:p.nome||'Produto',classe:p.classe||'—',unidade:p.unidade||'L',
+      preco:+p.preco||0,qtd:+p.estoque_atual||0,min:+p.estoque_min||0,
+      /* o PVgest não guarda carência: fica "não informada", nunca zero */
+      carencia:null,reentrada:null});
+  });
+  receitas.forEach(r=>{
+    novo.receitas.push({id:uid(),nome:r.nome||'Receita',cultura:r.cultura||'',alvo:r.alvo||'',
+      volumeHa:+r.volume_ha||200,
+      itens:(r.itens||[]).filter(i=>idMap[i.produto]).map(i=>({prodId:idMap[i.produto],dose:+i.dose||0}))});
+  });
+  let novos=0;
+  talhoes.forEach(t=>{
+    if(novo.talhoes.some(x=>x.nome.toLowerCase()===(t.nome||'').toLowerCase()))return;
+    const c=String(t.cultura||'').toLowerCase();
+    novo.talhoes.push({id:uid(),nome:t.nome||'Talhão',area:+t.area||0,
+      cultura:(CULTURAS_PVGEST.find(([trecho])=>c.includes(trecho))||[0,'cobertura'])[1]});
+    novos++;
+  });
+  return {db:novo,produtos:produtos.length,receitas:receitas.length,talhoes:novos};
+}
 function validateForm(f){
   clearFormError(f);const errors=[],add=(field,message)=>{if(!errors.some(x=>x.field===field&&x.message===message))errors.push({field,message});};
   [...f.elements].forEach(el=>{
@@ -2781,6 +2813,7 @@ function validateForm(f){
     if(!value)add(field,`${fieldLabel(el)} é obrigatório.`);
     else if(!db[target].some(x=>x.id===value))add(field,`${fieldLabel(el)}: o registro escolhido não existe mais. Recarregue a página.`);
   });
+  if(f.id==='f-rec'&&!recItens.length)add('nome','Adicione ao menos um produto à calda antes de salvar a receita.');
   if(f.id==='f-mip'&&!val(f,'lat')!==!val(f,'lon'))
     add(val(f,'lat')?'lon':'lat','Informe latitude e longitude juntas, ou deixe as duas em branco.');
   if(f.id==='f-carga'){
@@ -2897,31 +2930,12 @@ function render(){
       if(f.size>25*1048576)throw new Error('arquivo maior que 25 MB');
       const d=JSON.parse(await f.text());
       if(!d.produtos&&!d.talhoes&&!d.receitas)throw 0;
+      const resultado=importaPvgest(d,db);
       await beginUndo('Importação do PVgest');
-      const idMap={};
-      (d.produtos||[]).forEach(p=>{
-        const nid=uid();idMap[p.id]=nid;
-        db.defensivos.push({id:nid,nome:p.nome||'Produto',classe:p.classe||'—',unidade:p.unidade||'L',
-          preco:+p.preco||0,qtd:+p.estoque_atual||0,min:+p.estoque_min||0,
-          /* o PVgest não guarda carência: fica "não informada", nunca zero */
-          carencia:null,reentrada:null});
-      });
-      (d.receitas||[]).forEach(r=>{
-        db.receitas.push({id:uid(),nome:r.nome||'Receita',cultura:r.cultura||'',alvo:r.alvo||'',
-          volumeHa:+r.volume_ha||200,
-          itens:(r.itens||[]).filter(i=>idMap[i.produto]).map(i=>({prodId:idMap[i.produto],dose:+i.dose||0}))});
-      });
-      let novosT=0;
-      (d.talhoes||[]).forEach(t=>{
-        if(db.talhoes.some(x=>x.nome.toLowerCase()===(t.nome||'').toLowerCase()))return;
-        const c=(t.cultura||'').toLowerCase();
-        db.talhoes.push({id:uid(),nome:t.nome||'Talhão',area:+t.area||0,
-          cultura:c.includes('caf')?'cafe':c.includes('milh')?'milho':c.includes('soj')?'soja':'cafe'});
-        novosT++;
-      });
+      db=resultado.db;
       save();render();
       const m2=document.getElementById('imp-pv-msg');
-      if(m2)m2.textContent='Importado: '+(d.produtos||[]).length+' produtos, '+(d.receitas||[]).length+' receitas, '+novosT+' talhões novos.';
+      if(m2)m2.textContent='Importado: '+resultado.produtos+' produtos, '+resultado.receitas+' receitas, '+resultado.talhoes+' talhões novos.';
       showStatus('Dados do PVgest importados.',{undo:true});
     }catch(err){if(m)m.textContent='Arquivo inválido: cole o conteúdo de localStorage.getItem(\'pvgest_v1\') num .json.';}
   };

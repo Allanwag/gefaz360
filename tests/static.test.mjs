@@ -108,3 +108,7 @@ test('render usa rolagemAposRender e paginaHTML, não rola sempre ao topo nem ch
   assert.doesNotMatch(js,/window\.scrollTo\(0,0\)/);assert.doesNotMatch(js,/PAGES\[rota\]\(\)/);
 });
 test('colunas de row2 podem encolher',()=>assert.match(css,/\.row2>\*\{min-width:0\}/));
+test('importação do PVgest valida na cópia antes do ponto de desfazer e só então troca o banco',()=>{
+  assert.match(js,/importaPvgest\(d,db\);\s*await beginUndo\('Importação do PVgest'\);\s*db=resultado\.db;/);
+  assert.match(js,/const resultado=importaPvgest\(d,db\)/);
+});

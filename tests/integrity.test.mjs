@@ -611,3 +611,60 @@ test('salvar parâmetros mantém o filtro na safra corrente',async()=>{
 test('centro Cobertura aparece nas saídas por centro',()=>{
   const a=setup();assert.match(a.run('pgFin()'),/<span>Cobertura<\/span>/);
 });
+test('colheita por texto só casa talhão de café e prefere o nome mais longo',()=>{
+  const a=setup();
+  assert.equal(a.run('parseLinha("Colhi 2 carretas no Pivô 1").campos.talhaoId'),'');
+  assert.match(a.run('vozCard(parseLinha("Colhi 2 carretas no Pivô 1"),0)'),/— selecione —/);
+  assert.equal(a.run('parseLinha("Colhi 2 carretas no Santa Rita").campos.talhaoId'),'c1');
+  a.run("db.talhoes.push({id:'c9',nome:'Serra Nova',cultura:'cafe',area:3})");
+  assert.equal(a.run('parseLinha("Colhi 1 carreta na Serra Nova").campos.talhaoId'),'c9');
+});
+test('acharTalhao sem cultura continua achando qualquer talhão e ignora nome vazio',()=>{
+  const a=setup();
+  assert.equal(a.run('acharTalhao("aplicação no Pivô 1").id'),'m1');
+  assert.equal(a.run('acharTalhao("aplicação no Pivô 1","cafe")'),undefined);
+  assert.equal(a.run('acharTalhao("aplicação no Pivô 1","milho").id'),'m1');
+  a.run("db.talhoes.push({id:'z0',nome:'',cultura:'cafe',area:1})");
+  assert.equal(a.run('acharTalhao("texto qualquer","cafe")'),undefined);
+});
+test('receita sem produto não é salva',async()=>{
+  const a=setup();const n=a.run('db.receitas.length');
+  await a.submit('f-rec',{nome:'Vazia',cultura:'',alvo:'',volumeHa:200});
+  assert.equal(a.run('db.receitas.length'),n);
+  assert.equal(a.run('globalThis.errors[0].field'),'nome');
+  assert.equal(a.run('globalThis.errors[0].message'),'Adicione ao menos um produto à calda antes de salvar a receita.');
+  a.run('recItens=[{prodId:db.defensivos[0].id,dose:1}]');
+  await a.submit('f-rec',{nome:'Com produto',cultura:'',alvo:'',volumeHa:200});
+  assert.equal(a.run('db.receitas.length'),n+1);
+});
+test('importação do PVgest mapeia culturas e não deixa resto em caso de erro',()=>{
+  const a=setup();
+  a.run("globalThis.r=importaPvgest({talhoes:[{nome:'T Trigo',cultura:'Trigo',area:5},{nome:'T Sorgo',cultura:'sorgo',area:2},{nome:'T Feijão',cultura:'Feijão',area:1}]},db)");
+  assert.deepEqual(JSON.parse(a.run("JSON.stringify(r.db.talhoes.slice(-3).map(t=>t.cultura))")),['trigo','sorgo','cobertura']);
+  assert.equal(a.run('r.talhoes'),3);
+  const antes=a.run('JSON.stringify(db)');
+  assert.throws(()=>a.run("importaPvgest({produtos:[{id:1,nome:'P'},null]},db)"));
+  assert.equal(a.run('JSON.stringify(db)'),antes);
+});
+test('importação do PVgest trabalha numa cópia, liga receita aos produtos novos e não repete talhão',()=>{
+  const a=setup();const antes=a.run('JSON.stringify(db)');
+  a.run(`globalThis.r=importaPvgest({
+    produtos:[{id:7,nome:'Calda X',unidade:'L',estoque_atual:3}],
+    receitas:[{nome:'Rec PV',itens:[{produto:7,dose:2},{produto:99,dose:1}]}],
+    talhoes:[{nome:'santa rita',cultura:'Café',area:12},{nome:'Nova Gleba',cultura:'Soja Safrinha',area:4},{nome:'Chapa',cultura:'',area:1}]},db)`);
+  assert.equal(a.run('JSON.stringify(db)'),antes);
+  assert.notEqual(a.run('r.db===db'),true);
+  assert.equal(a.run('r.produtos'),1);assert.equal(a.run('r.receitas'),1);assert.equal(a.run('r.talhoes'),2);
+  assert.equal(a.run('r.db.receitas.at(-1).itens.length'),1);
+  assert.equal(a.run('r.db.receitas.at(-1).itens[0].prodId===r.db.defensivos.at(-1).id'),true);
+  assert.deepEqual(JSON.parse(a.run("JSON.stringify(r.db.talhoes.slice(-2).map(t=>[t.nome,t.cultura]))")),[['Nova Gleba','soja'],['Chapa','cobertura']]);
+  assert.equal(a.run('r.db.talhoes.length'),a.run('db.talhoes.length')+2);
+});
+test('o banco resultante da importação do PVgest passa na validação estrita',()=>{
+  const a=setup();
+  a.run(`globalThis.r=importaPvgest({
+    produtos:[{id:7,nome:'Calda X',unidade:'L',estoque_atual:3,preco:10}],
+    receitas:[{nome:'Rec PV',cultura:'Café',itens:[{produto:7,dose:2}]},{nome:'Rec sem itens',itens:[{produto:99,dose:1}]}],
+    talhoes:[{nome:'Nova Gleba',cultura:'Trigo',area:4},{nome:'Outra',cultura:'Feijão',area:2}]},db)`);
+  assert.doesNotThrow(()=>a.run('normalizeDatabase(JSON.parse(JSON.stringify(r.db)),{strict:true})'));
+});
